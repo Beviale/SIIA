@@ -1,0 +1,20 @@
+# ── Obbligatori per GeneralRecommender ──────────────────────────────
+is_multimodal_model: true
+end2end: False
+vision_feature_file: image_feat.npy   
+text_feature_file:   text_feat.npy    
+
+# ── Embedding ────────────────────────────────────────────────────────
+embedding_size: 64
+
+# ── MKGAT layers ─────────────────────────────────────────────────────
+n_layers: 2             
+aggregation_type: concat    # "add" | "concat"
+leaky_relu_slope: 0.2
+
+# ── Loss ─────────────────────────────────────────────────────────────
+reg_weight: 1e-5 
+
+# ── Representation format ─────────────────────────────────────────────────────────────
+model_enriched_triples_format: True # We have triples covering the user-item, item-item and the item-attributes relations
+batch_size_triplets: 50
