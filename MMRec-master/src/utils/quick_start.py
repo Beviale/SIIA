@@ -76,8 +76,8 @@ def quick_start(model, dataset, config_dict, save_model=True, mg=False):
         logger.info(model)
 
         # trainer loading and initialization
-        if model.name == "MKGAT":
-            trainer = MKGATTrainer()(config, model, mg)
+        if config['model'] == "MKGAT":
+            trainer = MKGATTrainer(config, model, mg)
         else:
             trainer = get_trainer()(config, model, mg)
         # debug

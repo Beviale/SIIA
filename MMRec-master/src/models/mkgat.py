@@ -54,18 +54,6 @@ class MKGAT(GeneralRecommender):
  
     def _init_model(self):
 
-        if self.v_feat is not None:
-           self.n_image_embedding = self.v_feat.shape[0] 
-           self.image_fc = nn.Sequential(
-                nn.Linear(self.v_feat.shape[1], self.embedding_dim),
-                nn.LeakyReLU(self.leaky_relu_slop)
-            )       
-        if self.t_feat is not None:
-           self.n_text_embedding  = self.t_feat.shape[0]  
-           self.text_fc = nn.Sequential(
-                nn.Linear(self.t_feat.shape[1], self.embedding_dim),
-                nn.LeakyReLU(self.leaky_relu_slop)
-            )
         self.max_structural_entity_index = max(int(entity) for entity in self.triplets.get_unique_entities_and_users()) 
         self.max_structural_relation_index =  max(int(r) for r in self.triplets.get_unique_relations())
 
@@ -82,13 +70,24 @@ class MKGAT(GeneralRecommender):
         self.user_embedding = nn.Embedding(self.n_triplets_users, self.embedding_dim)
 
 
-        self.shared_strcutural_fc = nn.Sequential(
+        self.shared_structural_fc = nn.Sequential(
             nn.Linear(self.embedding_dim, self.embedding_dim),
             nn.LeakyReLU(self.leaky_relu_slop)
         )
 
         self.n_triplets_items= len(self.triplets.get_unique_items()) 
-        new_triplets = self._build_kg_triplets()
+        new_triplets, n_valid_images, n_valid_texts = self._build_kg_triplets()
+        if n_valid_images is not None and n_valid_images > 0:
+           self.image_fc = nn.Sequential(
+                nn.Linear(n_valid_images, self.embedding_dim),
+                nn.LeakyReLU(self.leaky_relu_slop)
+            )       
+        if n_valid_texts is not None and n_valid_texts > 0:
+           self.text_fc = nn.Sequential(
+                nn.Linear(n_valid_texts, self.embedding_dim),
+                nn.LeakyReLU(self.leaky_relu_slop)
+            )
+           
         self.triplets.extend(new_triplets)
 
         self.mf_loss = BPRLoss()
@@ -112,20 +111,81 @@ class MKGAT(GeneralRecommender):
 
 
     def get_entity_embedding(self, entity_id):
-        if entity_id < self.n_triplets_users:
-            return self.shared_strcutural_fc(self.user_embedding(entity_id))
-        if entity_id < self.image_offset:
-            return self.shared_strcutural_fc(self.entity_embedding(entity_id - self.n_triplets_users))
-        elif entity_id < self.text_offset:
-            idx = entity_id - self.image_offset
+        entity_id_int = torch.tensor(int(entity_id), dtype=torch.long, device=self.device)
+        if entity_id_int < self.n_triplets_users:
+            return self.shared_structural_fc(self.user_embedding(torch.tensor(entity_id_int, device=self.device)))
+        if entity_id_int < self.image_offset:
+            return self.shared_structural_fc(self.entity_embedding(torch.tensor(entity_id_int - self.n_triplets_users, device=self.device)))
+        elif entity_id_int < self.text_offset:
+            idx = entity_id_int - self.image_offset
             return self.v_feat[idx]
         else:
-            idx = entity_id - self.text_offset
+            idx = entity_id_int - self.text_offset
             return self.t_feat[idx]
     
 
     def get_relation_embedding(self, relation_id):
-        return self.shared_strcutural_fc(self.relation_embedding(relation_id))
+        relation_id_int = torch.tensor(int(relation_id), dtype=torch.long, device=self.device)
+        return self.shared_structural_fc(self.relation_embedding(torch.tensor(relation_id_int, device=self.device)))
+    
+    def _get_multimodal_head_embeddings(self):
+        entities_emb = []
+        head_to_idx = {}
+        index = 0
+        for entity in sorted(self.triplets.get_all_head_entities()):
+            head_to_idx[entity] = index
+            entities_emb.append(self.get_entity_embedding(entity))  
+            index = index + 1
+        self.head_to_idx = head_to_idx
+        return torch.stack(entities_emb, dim=0)
+    
+    def _build_kg_triplets(self):
+        item_ids = torch.tensor([int(x) for x in self.triplets.get_unique_items()], dtype=torch.long, device=self.device)
+        self.image_offset = self.max_structural_entity_index + 1
+        n_valid_images = 0
+        n_valid_texts = 0
+
+        raw_triplets = []
+
+        # --- Relation: (item_i, hasImage, image_i) ---
+        if self.v_feat is not None:
+            self.image_relation_index = self.max_structural_relation_index + 1
+            has_v_mask = self.v_feat.abs().sum(dim=1) > 0
+            valid_items_v = item_ids[has_v_mask]
+            valid_images = torch.arange(len(self.v_feat), device=self.device)[has_v_mask] + self.image_offset
+            n_valid_images = len(valid_images)
+
+            if len(valid_items_v) > 0:
+                has_image = torch.stack([
+                    valid_items_v,
+                    torch.full_like(valid_items_v,  self.image_relation_index),
+                    valid_images
+                ], dim=1)
+                raw_triplets.extend([[str(x) for x in triplet] for triplet in has_image.tolist()])
+
+        self.text_offset  = self.image_offset + n_valid_images
+        # --- Relation: (item_i, hasText, text_i) ---
+        if self.t_feat is not None:
+            self.text_relation_index = self.max_structural_relation_index + 2
+            has_t_mask = self.t_feat.abs().sum(dim=1) > 0
+            
+            valid_items_t = item_ids[has_t_mask]
+            valid_texts = torch.arange(len(self.t_feat), device=self.device)[has_t_mask] + self.text_offset
+            n_valid_texts = len(valid_texts)
+        
+            if len(valid_items_t) > 0:
+                has_text = torch.stack([
+                    valid_items_t,
+                    torch.full_like(valid_items_t, self.text_relation_index), 
+                    valid_texts
+                ], dim=1)
+                raw_triplets.extend([[str(x) for x in triplet] for triplet in has_text.tolist()])
+
+        triplets = Triplets()
+        for raw_triplet in raw_triplets:
+            triplets.add(raw_triplet[0], raw_triplet[1], raw_triplet[2])
+
+        return triplets, n_valid_images, n_valid_texts
 
  
     # ──────────────────────────────────────────────────────────────────────────
@@ -139,7 +199,7 @@ class MKGAT(GeneralRecommender):
         if users:
             triplets = self.triplets.data
         else:
-            triplets = self.triplet.get_entity_triplets()
+            triplets = self.triplets.get_entity_triplets()
 
         for triplet in triplets:
             if users:
@@ -158,7 +218,10 @@ class MKGAT(GeneralRecommender):
             # e(h,r,t) = W1 * [h || r || t]  — eq. 2
             e_hrt = self.W1(torch.cat([h, r, t], dim=-1))
             triple_embs.append(e_hrt)
-            h_indices.append(self.head_to_idx[triplet.head])
+            if users:
+                h_indices.append(self.head_to_idx_with_users[triplet.head])
+            else:
+                h_indices.append(self.head_to_idx[triplet.head])
 
         triple_embs = torch.stack(triple_embs, dim=0)            # [n_triplets, dim]
         h_idx       = torch.tensor(h_indices, device=self.device) # [n_triplets]
@@ -181,70 +244,6 @@ class MKGAT(GeneralRecommender):
 
         return new_head_emb  
     
-
-    
-    def _get_multimodal_head_embeddings(self):
-        entities_emb = []
-        head_to_idx = {}
-        index = 0
-        for entity in sorted(self.triplets.get_all_head_entities()):
-            head_to_idx[entity] = index
-            entities_emb.append(self.get_entity_embedding(entity))  
-            index = index + 1
-        self.head_to_idx = head_to_idx
-        return torch.stack(entities_emb, dim=0)
-    
-    def _build_kg_triplets(self):
-        item_ids = torch.arange(self.n_triplets_items, device=self.device)
-        self.image_offset = self.max_structural_entity_index + 1
-        n_valid_images = 0
-        n_valid_texts = 0
-
-        raw_triplets = []
-
-        # --- Relation: (item_i, hasImage, image_i) ---
-        if self.v_feat is not None:
-            self.image_relation_index = self.max_structural_relation_index + 1
-            has_v_mask = self.v_feat.abs().sum(dim=1) > 0
-            valid_items_v = item_ids[has_v_mask]
-            valid_images = torch.arange(len(self.v_feat), device=self.device)[has_v_mask] + self.image_offset
-            n_valid_images = len(valid_images)
-
-        
-        
-            if len(valid_items_v) > 0:
-                has_image = torch.stack([
-                    valid_items_v,
-                    torch.full_like(valid_items_v,  self.image_relation_index),
-                    valid_images
-                ], dim=1)
-                raw_triplets.extend(has_image.tolist())
-
-        self.text_offset  = self.image_offset + n_valid_images
-        # --- Relation: (item_i, hasText, text_i) ---
-        if self.t_feat is not None:
-            self.text_relation_index = self.max_structural_relation_index + 2
-            has_t_mask = self.t_feat.abs().sum(dim=1) > 0
-            
-            valid_items_t = item_ids[has_t_mask]
-            valid_texts = torch.arange(len(self.t_feat), device=self.device)[has_t_mask] + self.text_offset
-            n_valid_texts = len(valid_texts)
-        
-            if len(valid_items_t) > 0:
-                has_text = torch.stack([
-                    valid_items_t,
-                    torch.full_like(valid_items_t, self.text_relation_index), 
-                    valid_texts
-                ], dim=1)
-                raw_triplets.extend(has_text.tolist())
-
-
-        triplets = Triplets()
-        for raw_triplet in raw_triplets:
-            triplets.add(raw_triplet[0], raw_triplet[1], raw_triplet[2])
-
-        return triplets
- 
     # ──────────────────────────────────────────────────────────────────────────
     # Forward
     # ──────────────────────────────────────────────────────────────────────────
@@ -260,7 +259,10 @@ class MKGAT(GeneralRecommender):
  
         return entities_head_emb
      
-    def forward_rec(self, head_emb):
+    def forward_rec(self, head_emb=None):
+
+        if head_emb is None:
+            head_emb = self.forward_kg()
 
         if self.last_head_index_before_user is None:
             self.user_ids = sorted(self.triplets.get_unique_users())
@@ -411,7 +413,7 @@ class MKGAT(GeneralRecommender):
         return scores
     
     
-    def scatter_softmax(src, index, num_nodes=None):
+    def scatter_softmax(src, index, num_nodes=None): #attn_logits, h_idx, num_nodes=head_emb.shape[0])
         # 1. Calcoliamo il massimo per ogni gruppo per stabilità numerica (evita overflow)
         out_max = torch.zeros(num_nodes, device=src.device) if num_nodes else torch.zeros(int(index.max()) + 1, device=src.device)
         out_max.index_reduce_(0, index, src, reduce='amax', include_self=False)
