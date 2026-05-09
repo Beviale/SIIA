@@ -34,7 +34,9 @@ class Triplets:
     def get_unique_entities(self) -> Set[str]:
         entities = set()
         for t in self.data:
-            if t.relation != "0":
+            if t.relation == "0":
+                entities.add(t.tail)
+            else:
                 entities.add(t.head)
                 entities.add(t.tail)
         return entities

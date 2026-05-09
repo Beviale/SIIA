@@ -358,6 +358,7 @@ class MKGATTrainer(Trainer):
     
     def _build_optimizer_rec(self):
         kg_params = [
+            {'params': self.model.entity_embedding.parameters()},
             {'params': self.model.relation_embedding.parameters()},
             {'params': self.model.shared_structural_fc.parameters()},
             {'params': self.model.W1.parameters()},
@@ -376,14 +377,14 @@ class MKGATTrainer(Trainer):
             return 0.0, []
         self.model.train()
         total_loss_rec = 0.0
-        loss_batches   = []
+        loss_batches = []
 
         for batch_idx, interaction in enumerate(train_data):
 
             # STEP 1: KG module
             self.optimizer_kg.zero_grad()
             entities_head_emb = self.model.forward_kg()
-            loss_kg = self.model.compute_kg_loss(entities_head_emb)
+            loss_kg = self.model.compute_kg_loss(batch_idx, entities_head_emb)
             loss_kg.backward()
             if self.clip_grad_norm:
                 clip_grad_norm_(
@@ -394,8 +395,8 @@ class MKGATTrainer(Trainer):
 
             # STEP 2: REC module
             self.optimizer_rec.zero_grad()
-            user_emb, item_emb = self.model.forward_rec(entities_head_emb.detach())
-            loss_rec = self.model._compute_rec_loss(interaction, user_emb, item_emb)
+            user_emb, item_emb = self.model.forward_rec()
+            loss_rec = self.model.compute_rec_loss(interaction, user_emb, item_emb)
             loss_rec.backward()
             if self.clip_grad_norm:
                 clip_grad_norm_(

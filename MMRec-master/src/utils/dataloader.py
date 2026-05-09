@@ -159,6 +159,23 @@ class TrainDataLoader(AbstractDataLoader):
             triplets_file_name = self.dataset.config['kg_triplets_file_name']
             input_path = os.path.join(self.dataset.dataset_path, triplets_file_name)
             if os.path.exists(input_path):
+                inter_matr = self.inter_matrix()
+                pairs_user_item = set(zip(inter_matr.row, inter_matr.col))
+                n_users = len(set(inter_matr.row))
+
+                # Colonne (item) presenti nella matrice
+                items_in_matrix = set(inter_matr.col)
+
+                # Tutti gli item possibili secondo la shape della matrice
+                all_items = set(range(inter_matr.shape[1]))
+
+                # Item mancanti (colonne tutte zero)
+                missing_items = all_items - items_in_matrix
+
+                print(f"Item mancanti: {len(missing_items)}")
+                print(f"Indici: {sorted(missing_items)}")
+
+
                 with open(input_path, 'r', encoding='utf-8') as f:
                     for line in f:
                         line = line.strip()
@@ -168,11 +185,22 @@ class TrainDataLoader(AbstractDataLoader):
                         parts = line.split()
                         
                         if len(parts) == 3:
-                            triplets.add(
-                                head=parts[0], 
-                                relation=parts[1], 
-                                tail=parts[2]
-                            )        
+                            tr_head = parts[0]
+                            tr_relation = parts[1]
+                            tr_tail = parts[2]
+                            if tr_relation == "0":
+                                if (int(tr_head), int(tr_tail) - n_users) in pairs_user_item:
+                                    triplets.add(
+                                        head=tr_head, 
+                                        relation=tr_relation, 
+                                        tail=tr_tail
+                                    ) 
+                            else:
+                                 triplets.add(
+                                            head=tr_head, 
+                                            relation=tr_relation, 
+                                            tail=tr_tail
+                                        )       
         return triplets
         
     
