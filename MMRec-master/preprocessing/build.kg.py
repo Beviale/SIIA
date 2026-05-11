@@ -4,6 +4,24 @@ import json
 import ast
 
 def construct_triplets(dataset_name, interact_file_name, metadata_id_field, metadata_relations_names):
+    """
+        Constructs a Knowledge Graph in triplet format (head, relation, tail).
+        This method integrates semantic Item-Entity relations from a JSON metadata file 
+        with User-Item behavioral relations from an interaction (.inter) file. The 
+        resulting graph merges domain knowledge with user activity into a unified structure.
+
+        Upon completion, the generated triplets are saved in the dataset directory as triplets.txt.
+
+        Args:
+            dataset_name (str): The name of the dataset.
+            interact_file_name (str): Path to the .inter file containing user-item 
+                interactions.
+            metadata_id_field (str): The key in the JSON file used as the unique 
+                identifier for items.
+            metadata_relations_names (list of str): A list of JSON keys to be 
+                extracted as relational predicates (e.g., ['brand', 'category']).
+    """
+
     relations = {}
     relations[0] = "Interact relation"
     index = 1

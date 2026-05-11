@@ -51,16 +51,16 @@ class Triplets:
     def get_all_head_entities(self) -> Set[str]:
         heads = set()
         for t in self.data:
-            if t.relation != "0":
+            if t.relation != '0':
                 heads.add(t.head)
         return heads
 
     def get_unique_items(self) -> Set[str]:
-        users = set()
+        items = set()
         for t in self.data:
             if t.relation == "0":
-                users.add(t.tail)
-        return users
+                items.add(t.tail)
+        return items
 
     def get_unique_entities_and_users(self) -> Set[str]:
         entities = set()

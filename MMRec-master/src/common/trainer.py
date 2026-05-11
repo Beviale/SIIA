@@ -339,11 +339,122 @@ class MKGATTrainer(Trainer):
     def __init__(self, config, model, mg=False):
         super(MKGATTrainer, self).__init__(config, model, mg)
         self.optimizer_kg = self._build_optimizer_kg()
-        self.optimizer_rec = self._build_optimizer_rec()
+
+    def load_checkpoint(self):
+        save_dir = self.config["checkpoint_dir"]
+        ckpt_path = os.path.join(save_dir, f'{self.config["model"]}-{self.config["dataset"]}-best.pth')
+        if not os.path.exists(ckpt_path):
+            self.logger.info('No checkpoint found, starting from scratch.')
+            return
+        ckpt = torch.load(ckpt_path, map_location=self.device)
+        self.model.load_state_dict(ckpt['model_state_dict'])
+        self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        self.optimizer_kg.load_state_dict(ckpt['optimizer_kg_state_dict'])
+        self.start_epoch = ckpt['epoch'] + 1
+        self.best_valid_score = ckpt['best_valid_score']
+        self.best_valid_result = ckpt['best_valid_result']
+        self.best_test_upon_valid = ckpt['best_test_upon_valid']
+        self.cur_step = ckpt['cur_step']        
+        for _ in range(self.start_epoch):
+            self.lr_scheduler.step()
+        self.logger.info(f'Checkpoint loaded ← {ckpt_path} (resuming from epoch {self.start_epoch})')
+
+
+    def _save_checkpoint(self, epoch_idx):
+        save_dir = self.config["checkpoint_dir"]
+        os.makedirs(save_dir, exist_ok=True)
+        ckpt_path = os.path.join(
+            save_dir,
+            f'{self.config["model"]}-{self.config["dataset"]}-best.pth'
+        )
+        torch.save({
+            'epoch': epoch_idx,
+            'model_state_dict': self.model.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'optimizer_kg_state_dict': self.optimizer_kg.state_dict(),
+            'best_valid_score': self.best_valid_score,
+            'best_valid_result': self.best_valid_result,
+            'best_test_upon_valid': self.best_test_upon_valid,
+            'cur_step': self.cur_step,  
+        }, ckpt_path)
+        self.logger.info(f'Checkpoint saved → {ckpt_path}')
+
+    def fit(self, train_data, valid_data=None, test_data=None, saved=True, verbose=True):
+        r"""Train the model based on the train data and the valid data.
+
+        Args:
+            train_data (DataLoader): the train data
+            valid_data (DataLoader, optional): the valid data, default: None.
+                                               If it's None, the early_stopping is invalid.
+            test_data (DataLoader, optional): None
+            verbose (bool, optional): whether to write training and evaluation information to logger, default: True
+            saved (bool, optional): whether to save the model parameters, default: True
+
+        Returns:
+             (float, dict): best valid score and best valid result. If valid_data is None, it returns (-1, None)
+        """
+        self.load_checkpoint()
+        for epoch_idx in range(self.start_epoch, self.epochs):
+            # train
+            training_start_time = time()
+            self.model.pre_epoch_processing()
+            train_loss, _ = self._train_epoch(train_data, epoch_idx)
+            if torch.is_tensor(train_loss):
+                # get nan loss
+                break
+            #for param_group in self.optimizer.param_groups:
+            #    print('======lr: ', param_group['lr'])
+            self.lr_scheduler.step()
+
+            self.train_loss_dict[epoch_idx] = sum(train_loss) if isinstance(train_loss, tuple) else train_loss
+            training_end_time = time()
+            train_loss_output = \
+                self._generate_train_loss_output(epoch_idx, training_start_time, training_end_time, train_loss)
+            post_info = self.model.post_epoch_processing()
+            if verbose:
+                self.logger.info(train_loss_output)
+                if post_info is not None:
+                    self.logger.info(post_info)
+
+            # eval: To ensure the test result is the best model under validation data, set self.eval_step == 1
+            if (epoch_idx + 1) % self.eval_step == 0:
+                valid_start_time = time()
+                valid_score, valid_result = self._valid_epoch(valid_data)
+                self.best_valid_score, self.cur_step, stop_flag, update_flag = early_stopping(
+                    valid_score, self.best_valid_score, self.cur_step,
+                    max_step=self.stopping_step, bigger=self.valid_metric_bigger)
+                valid_end_time = time()
+                valid_score_output = "epoch %d evaluating [time: %.2fs, valid_score: %f]" % \
+                                     (epoch_idx, valid_end_time - valid_start_time, valid_score)
+                valid_result_output = 'valid result: \n' + dict2str(valid_result)
+                # test
+                _, test_result = self._valid_epoch(test_data)
+                if verbose:
+                    self.logger.info(valid_score_output)
+                    self.logger.info(valid_result_output)
+                    self.logger.info('test result: \n' + dict2str(test_result))
+                if update_flag:
+                    update_output = '██ ' + self.config['model'] + '--Best validation results updated!!!'
+                    if verbose:
+                        self.logger.info(update_output)
+                    self.best_valid_result = valid_result
+                    self.best_test_upon_valid = test_result
+
+                    if saved:
+                        self._save_checkpoint(epoch_idx) 
+
+                if stop_flag:
+                    stop_output = '+++++Finished training, best eval result in epoch %d' % \
+                                  (epoch_idx - self.cur_step * self.eval_step)
+                    if verbose:
+                        self.logger.info(stop_output)
+                    break
+        return self.best_valid_score, self.best_valid_result, self.best_test_upon_valid
 
     def _build_optimizer_kg(self):
         kg_params = [
             {'params': self.model.entity_embedding.parameters()},
+            {'params': self.model.user_embedding.parameters()},
             {'params': self.model.relation_embedding.parameters()},
             {'params': self.model.shared_structural_fc.parameters()},
             {'params': self.model.W1.parameters()},
@@ -356,21 +467,6 @@ class MKGATTrainer(Trainer):
         return optim.Adam(kg_params, lr=self.learning_rate, 
                          weight_decay=self.weight_decay)
     
-    def _build_optimizer_rec(self):
-        kg_params = [
-            {'params': self.model.entity_embedding.parameters()},
-            {'params': self.model.relation_embedding.parameters()},
-            {'params': self.model.shared_structural_fc.parameters()},
-            {'params': self.model.W1.parameters()},
-            {'params': self.model.W2.parameters()},
-            {'params': self.model.W3.parameters()},
-        ]
-        if self.model.v_feat is not None:
-            kg_params.append({'params': self.model.image_fc.parameters()})
-        if self.model.t_feat is not None:
-            kg_params.append({'params': self.model.text_fc.parameters()})
-        return optim.Adam(kg_params, lr=self.learning_rate, 
-                         weight_decay=self.weight_decay)
 
     def _train_epoch(self, train_data, epoch_idx, loss_func=None):
         if not self.req_training:
@@ -385,32 +481,35 @@ class MKGATTrainer(Trainer):
             self.optimizer_kg.zero_grad()
             entities_head_emb = self.model.forward_kg()
             loss_kg = self.model.compute_kg_loss(batch_idx, entities_head_emb)
+            self.logger.info("Loss KG:" + str(loss_kg.item()))
             loss_kg.backward()
             if self.clip_grad_norm:
                 clip_grad_norm_(
                     [p for g in self.optimizer_kg.param_groups for p in g['params']],
-                    **self.clip_grad_norm
+                    max_norm=self.clip_grad_norm
                 )
             self.optimizer_kg.step()
 
             # STEP 2: REC module
-            self.optimizer_rec.zero_grad()
+            self.optimizer.zero_grad()
             user_emb, item_emb = self.model.forward_rec()
             loss_rec = self.model.compute_rec_loss(interaction, user_emb, item_emb)
+            self.logger.info("Loss Rec:" + str(loss_rec.item()))
             loss_rec.backward()
             if self.clip_grad_norm:
-                clip_grad_norm_(
-                    [p for g in self.optimizer_rec.param_groups for p in g['params']],
-                    **self.clip_grad_norm
+               clip_grad_norm_(
+                    [p for g in self.optimizer_kg.param_groups for p in g['params']],
+                    max_norm=self.clip_grad_norm
                 )
-            self.optimizer_rec.step()
+            self.optimizer.step()
 
             if self._check_nan(loss_kg + loss_rec):
-                self.logger.info(f'Loss is nan at epoch {epoch_idx}, batch {batch_idx}.')
+                self.logger.error(f'Loss is nan at epoch {epoch_idx}, batch {batch_idx}.', exc_info=True)
+                self.load_checkpoint()  
                 return total_loss_rec, loss_batches
 
             total_loss_rec += loss_rec.item()
-            loss_batches.append(loss_rec).detach()
+            loss_batches.append(loss_rec.item())
 
         return total_loss_rec, loss_batches
 
