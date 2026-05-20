@@ -264,24 +264,14 @@ class MKGAT(GeneralRecommender):
         ])
 
 
-        h_indices, r_indices, t_is_head, t_head_indices, t_entity_indices = [], [], [], [], []
-        for triplet in self.triplets.data:
-            h_indices.append(self.head_to_idx[triplet.head])
-            r_indices.append(int(triplet.relation))
-            if triplet.tail in self.head_to_idx:
-                t_is_head.append(True)
-                t_head_indices.append(self.head_to_idx[triplet.tail])
-                t_entity_indices.append(0)
-            else:
-                t_is_head.append(False)
-                t_head_indices.append(0)
-                t_entity_indices.append(int(triplet.tail))
+        self.triplet_h_idx = torch.from_numpy(np.array(h_indices, dtype=np.int64)).to(self.device)
+        self.triplet_r_idx  = torch.from_numpy(np.array(r_indices, dtype=np.int64)).to(self.device)
+        self.triplet_t_is_head = torch.from_numpy(np.array(t_is_head, dtype=np.bool)).to(self.device)
+        self.triplet_t_head_idx =torch.from_numpy(np.array(t_head_indices, dtype=np.int64)).to(self.device)
+        self.triplet_t_ent_idx  = torch.from_numpy(np.array(t_entity_indices, dtype=np.int64)).to(self.device)
 
-        self.triplet_h_idx = torch.tensor(h_indices, dtype=torch.long, device=self.device)
-        self.triplet_r_idx  = torch.tensor(r_indices, dtype=torch.long, device=self.device)
-        self.triplet_t_is_head  = torch.tensor(t_is_head, device=self.device)
-        self.triplet_t_head_idx = torch.tensor(t_head_indices, dtype=torch.long, device=self.device)
-        self.triplet_t_ent_idx  = torch.tensor(t_entity_indices, dtype=torch.long, device=self.device)
+        self.head_user_idx_tensor = torch.tensor(sorted(self.head_user_idxs), dtype=torch.long, device=self.device)
+        self.head_item_idx_tensor = torch.tensor(sorted(self.head_item_idxs), dtype=torch.long, device=self.device)
 
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -289,7 +279,7 @@ class MKGAT(GeneralRecommender):
     # ──────────────────────────────────────────────────────────────────────────
     def _get_entity_embedding(self, entity):
         """
-        Returns the embedding vector for a given entity.
+        Return the embedding vector for a given entity.
         Args:
             entity (str): the entity identifier.         
         """
@@ -297,13 +287,16 @@ class MKGAT(GeneralRecommender):
 
     def _get_entity_embeddings_batch(self, entity_ids):
         """
-        Returns a matrix containing the embeddings of a batch of entities.
+        Return a matrix containing the embeddings of a batch of entities.
         Args:
-            entity_ids (list of strings): the list of entity identifiers.
+            entity_ids (list of strings or tensor of integers): the list of entity identifiers.
         Returns:
             out: matrix of shape (n_entities, embedding_dim)
         """
-        entity_ids = torch.tensor([int(x) for x in entity_ids], dtype=torch.long, device=self.device)
+        if not isinstance(entity_ids, torch.Tensor):
+            entity_ids = torch.as_tensor([int(x) for x in entity_ids], dtype=torch.long, device=self.device)
+        else:
+            entity_ids = entity_ids.to(dtype=torch.long, device=self.device)
                       
         out = torch.zeros(len(entity_ids), self.embedding_dim, device=self.device)
 
@@ -343,9 +336,9 @@ class MKGAT(GeneralRecommender):
 
     def _get_relation_embedding_batch(self, relation_ids):
         """
-        Returns a matrix containing the embeddings of a batch of relations.
+        Return a matrix containing the embeddings of a batch of relations.
         Args:
-            relation_ids (list of strings): the list of relation identifiers.
+            relation_ids (list of strings or tensor of integers): the list of relation identifiers.
         Returns:
             out: matrix of shape (n_relations, embedding_dim)
         """
@@ -359,13 +352,11 @@ class MKGAT(GeneralRecommender):
 
     def _get_head_embeddings(self):
         """
-        Returns the embeddings of all head entities in the triplets.
+        Return the embeddings of all head entities and users in the triplets.
         Returns:
             Tensor: matrix of shape (n_head_entities, embedding_dim)
         """
-        entities_emb = []
-        entities_emb.append(self._get_entity_embeddings_batch(self.head_entities_and_users))  
-        return torch.cat(entities_emb, dim=0)
+        return self._get_entity_embeddings_batch(self.head_entities_and_users)
 
       
     # ──────────────────────────────────────────────────────────────────────────
@@ -374,7 +365,7 @@ class MKGAT(GeneralRecommender):
  
     def _mkg_attention_layer(self, head_emb):
         """
-        Performs one Multi-modal Knowledge Graph Attention layer forward pass.
+        Perform one Multi-modal Knowledge Graph Attention layer forward pass.
         Args:
             head_emb (Tensor): matrix of shape (n_head_entities, embedding_dim)
                 containing the current embeddings of all head entities
@@ -415,7 +406,7 @@ class MKGAT(GeneralRecommender):
  
     def forward_kg(self):
         """
-        Performs the forward pass of the Knowledge Graph Embedding module.
+        Perform the forward pass of the Knowledge Graph Embedding module.
         User embeddings are excluded from the output.
         Returns:
             Tensor: matrix of shape (n_entities, embedding_dim)
@@ -432,7 +423,7 @@ class MKGAT(GeneralRecommender):
 
     def forward_rec(self):
         """
-        Performs the forward pass of the Recommendation module.
+        Perform the forward pass of the Recommendation module.
 
         Returns:
             user_all_embeddings (Tensor): matrix of shape (n_users, embedding_dim * (n_layers + 1))
@@ -442,13 +433,13 @@ class MKGAT(GeneralRecommender):
         """
         all_head_emb = self._get_head_embeddings()
 
-        layer_outputs_users = [all_head_emb[list(self.head_user_idxs)]]
-        layer_outputs_items = [all_head_emb[list(self.head_item_idxs)]]
+        layer_outputs_users = [all_head_emb[self.head_user_idx_tensor]]
+        layer_outputs_items = [all_head_emb[self.head_item_idx_tensor]]
 
         for _ in range(self.n_layers):
             all_head_emb = self._mkg_attention_layer(all_head_emb)
-            layer_outputs_users.append(all_head_emb[list(self.head_user_idxs)])
-            layer_outputs_items.append(all_head_emb[list(self.head_item_idxs)])
+            layer_outputs_users.append(all_head_emb[self.head_user_idx_tensor])
+            layer_outputs_items.append(all_head_emb[self.head_item_idx_tensor])
 
         user_all_embeddings = torch.cat(layer_outputs_users, dim=1)
         item_all_embeddings = torch.cat(layer_outputs_items, dim=1)
@@ -462,8 +453,8 @@ class MKGAT(GeneralRecommender):
  
     def compute_kg_loss(self, batch_index, head_emb=None):
         """
-        Computes the Knowledge Graph pairwise ranking loss over a batch of triplets.
-        Encourages valid triplets to have a lower score than corrupted ones.
+        Compute the Knowledge Graph pairwise ranking loss over a batch of triplets.
+        It Encourages valid triplets to have a lower score than corrupted ones.
         Args:
             batch_index (int): index of the current recommendation module batch.
             head_emb (Tensor, optional): precomputed head entity embeddings. 
@@ -520,7 +511,7 @@ class MKGAT(GeneralRecommender):
 
     def _corrupt_tail_for_relation(self, triplet):
         """
-        Given a triplet, returns a corrupted tail entity.
+        Given a triplet, it returns a corrupted tail entity.
         If the relation associates an item with its image or text,
         the corrupted tail is sampled from the same modality (another image or text).
         Otherwise, the corrupted tail is sampled randomly from all entities.
@@ -548,7 +539,7 @@ class MKGAT(GeneralRecommender):
 
     def compute_rec_loss(self, interaction, user_all=None, item_all=None):
         """
-        Computes the recommendation loss for a batch of user-item interactions
+        Compute the recommendation loss for a batch of user-item interactions
         using Bayesian Personalized Ranking (BPR) loss with L2 regularization.
 
         Args:
@@ -596,7 +587,7 @@ class MKGAT(GeneralRecommender):
  
     def full_sort_predict(self, interaction):
         """
-        Computes the predicted scores for all items for a given batch of users.
+        Compute the predicted scores for all items for a given batch of users.
         Used during evaluation to rank all items for each user.
 
         Args:
@@ -616,7 +607,7 @@ class MKGAT(GeneralRecommender):
     
     def _scatter_softmax(self, src, index, num_nodes): #attn_logits, h_idx, num_nodes=head_emb.shape[0])
         """
-        Computes a numerically stable softmax.
+        Compute a numerically stable softmax.
         Args:
             src (Tensor): input logits of shape (n_triplets,)
             index (Tensor): group assignments of shape (n_triplets,),
