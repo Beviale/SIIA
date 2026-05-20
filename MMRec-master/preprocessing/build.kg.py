@@ -2,24 +2,44 @@
 import os
 import json
 import ast
+import csv
+from tqdm import tqdm
+import pandas as pd
 
-def construct_triplets(dataset_name, interact_file_name, metadata_id_field, metadata_relations_names):
+
+def construct_triplets_json(dataset_name, interact_file_name, metadata_id_field, metadata_relations_names):
     """
-        Constructs a Knowledge Graph in triplet format (head, relation, tail).
-        This method integrates semantic Item-Entity relations from a JSON metadata file 
-        with User-Item behavioral relations from an interaction (.inter) file. The 
-        resulting graph merges domain knowledge with user activity into a unified structure.
+    Constructs a Knowledge Graph (KG) in triplet format (head, relation, tail)
+    by combining user-item interaction triplets with semantic triplets extracted
+    from a JSON metadata file.
 
-        Upon completion, the generated triplets are saved in the dataset directory as triplets.txt.
+    User-item interactions are treated as triplets of the form:
+        (user_id, interaction, item_id)
+    where item indices are offset by the number of users to avoid ID collisions
+    between users and items in the entity space.
 
-        Args:
-            dataset_name (str): The name of the dataset.
-            interact_file_name (str): Path to the .inter file containing user-item 
-                interactions.
-            metadata_id_field (str): The key in the JSON file used as the unique 
-                identifier for items.
-            metadata_relations_names (list of str): A list of JSON keys to be 
-                extracted as relational predicates (e.g., ['brand', 'category']).
+    Semantic triplets are extracted by navigating the JSON metadata structure
+    using slash-separated paths (e.g., 'related/also_bought'), allowing nested
+    fields to be used as relational predicates. Each (item, relation, entity)
+    triplet is assigned contiguous integer indices. If the object entity is
+    already known (either as an item or a previously seen entity), its existing
+    index is reused; otherwise, a new index is assigned.
+
+    The resulting triplets are saved to a file named 'triplets.txt' in the
+    dataset directory.
+
+    Args:
+        dataset_name (str): Name of the dataset (e.g., 'baby'). Used to locate
+            the dataset directory at '../data/{dataset_name}'.
+        interact_file_name (str): Name of the .inter file containing user-item
+            interactions, expected to have at least 'userID' and 'itemID' columns
+            separated by tabs.
+        metadata_id_field (str): The key in the JSON metadata file used as the
+            unique identifier for each item (e.g., 'asin').
+        metadata_relations_names (list of str): A list of keys (or slash-separated
+            nested paths) to be extracted from the metadata as relational predicates
+            (e.g., ['brand', 'related/also_bought']).
+        
     """
 
     relations = {}
@@ -136,7 +156,119 @@ def construct_triplets(dataset_name, interact_file_name, metadata_id_field, meta
                 line = "\t".join(map(str, triple))
                 f.write(line + "\n")
             
-construct_triplets("baby", "baby.inter", "asin", ["brand", "related/also_bought"])
+#construct_triplets_json("baby", "baby.inter", "asin", ["brand", "related/also_bought"])
+
+
+
+
+def construct_triplets(dataset_name, interact_file_name, additional_triplets_filename):
+    """
+    Constructs a Knowledge Graph (KG) in triplet format (head, relation, tail)
+    by combining user-item interaction triplets with semantic triplets from an
+    external knowledge source (e.g., DBpedia, Wikidata).
+
+    User-item interactions are treated as triplets of the form:
+        (user_id, interaction, item_id)
+    where item indices are offset by the number of users to avoid ID collisions
+    between users and items in the entity space.
+
+    Semantic triplets (subject, predicate, object) are filtered to retain only
+    those whose subject belongs to the set of known items and whose object is a
+    URI (i.e., non-literal values such as plain text or numbers are discarded,
+    as textual content is already encoded as dense multimodal features).
+
+    All entities and relations are remapped to contiguous integer indices.
+    The resulting triplets are saved to a file named 'triplets.txt' in the
+    dataset directory.
+
+    Args:
+        dataset_name (str): Name of the dataset (e.g., 'movielens'). Used to
+            locate the dataset directory at '../data/{dataset_name}'.
+        interact_file_name (str): Name of the .inter file containing user-item
+            interactions, expected to have at least 'userID' and 'itemID' columns
+            separated by tabs.
+        additional_triplets_filename (str): Name of the .tsv file containing
+            semantic triplets in (subject, predicate, object) format, with no
+            header and tab-separated columns.
+    """
+
+    dataset_dir = f"../data/{dataset_name}"
+    output_path = os.path.join(dataset_dir, "triplets.txt")
+    i_id_mapping = os.path.join(dataset_dir, "i_id_mapping.csv")
+    interact_path = os.path.join(dataset_dir, interact_file_name)
+    additional_triplets_path = os.path.join(dataset_dir, additional_triplets_filename)
+    n_user = pd.read_csv(interact_path, sep='\t', usecols=['userID'])['userID'].nunique()
+    items_id2index = {}
+    with open(i_id_mapping, 'r') as f:
+        reader = csv.reader(f)
+        next(reader)  # skip header
+        for parts in reader:
+                if len(parts) >= 2:
+                    id = parts[0] 
+                    index = int(parts[1]) + n_user
+                    items_id2index[id] = index
+    n_items = len(items_id2index.keys())
+    interaction_triplets = []
+    with open(interact_path, 'r') as f:
+        header = f.readline() 
+        for line in f:
+            parts = line.split()
+            if len(parts) >= 2:
+                user_id = int(parts[0]) # Head
+                item_id = int(parts[1]) + n_user # Tail  
+                relation = 0       
+                print(f"New triple: {user_id} {relation} {item_id}")     
+                interaction_triplets.append([user_id, relation, item_id])
+    
+    print("\n....Writing the interaction triplets\n\n")
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for triple in interaction_triplets:
+            line = "\t".join(map(str, triple))
+            f.write(line + "\n")
+    
+    relation_id2index = {}
+    entities_id2index = {}
+    entities_id2index.update(items_id2index)
+    relation_id2index["interaction"] = 0
+    chunks = pd.read_csv(additional_triplets_path, sep='\t', chunksize=20000)
+    for chunk in tqdm(chunks, desc="Processed chunk"):
+        additional_triplets = []
+        for _, row in chunk.iterrows():
+            subject   = row["subject"]
+            predicate = row["predicate"]
+            obj       = row["object"]
+
+            if subject not in items_id2index.keys():
+                continue 
+            if not str(obj).startswith('http'):
+                continue
+
+            if predicate not in relation_id2index:
+                max_index_until_now = max(relation_id2index.values())
+                relation_id2index[predicate] = max_index_until_now + 1
+            predicate_index =  relation_id2index[predicate]
+
+            subject_index =  entities_id2index[subject]
+
+            if obj not in entities_id2index:
+                max_index_until_now = max(entities_id2index.values())
+                entities_id2index[obj] = max_index_until_now +1
+            object_index =  entities_id2index[obj]
+
+            print(f"New triple: {subject_index} {predicate_index} {object_index}")     
+            additional_triplets.append([subject_index, predicate_index, object_index])
+        print("\n....Writing the additional triplets\n")
+        with open(output_path, 'a', encoding='utf-8') as f:
+            for triple in additional_triplets:
+                line = "\t".join(map(str, triple))
+                f.write(line + "\n")
+            
+construct_triplets("movielens", "movielens_1m.inter", "ml25m_dbpedia_1hop.tsv")
+
+
+
+
+        
 
 
 

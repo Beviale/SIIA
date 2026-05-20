@@ -244,8 +244,7 @@ class Trainer(AbstractTrainer):
             if torch.is_tensor(train_loss):
                 # get nan loss
                 break
-            #for param_group in self.optimizer.param_groups:
-            #    print('======lr: ', param_group['lr'])
+            
             self.lr_scheduler.step()
 
             self.train_loss_dict[epoch_idx] = sum(train_loss) if isinstance(train_loss, tuple) else train_loss
@@ -340,7 +339,7 @@ class MKGATTrainer(Trainer):
         super(MKGATTrainer, self).__init__(config, model, mg)
         self.optimizer_kg = self._build_optimizer_kg()
 
-    def load_checkpoint(self):
+    def _load_checkpoint(self):
         save_dir = self.config["checkpoint_dir"]
         ckpt_path = os.path.join(save_dir, f'{self.config["model"]}-{self.config["dataset"]}-best.pth')
         if not os.path.exists(ckpt_path):
@@ -393,7 +392,7 @@ class MKGATTrainer(Trainer):
         Returns:
              (float, dict): best valid score and best valid result. If valid_data is None, it returns (-1, None)
         """
-        self.load_checkpoint()
+        self._load_checkpoint()
         for epoch_idx in range(self.start_epoch, self.epochs):
             # train
             training_start_time = time()
@@ -498,15 +497,15 @@ class MKGATTrainer(Trainer):
             loss_rec.backward()
             if self.clip_grad_norm:
                clip_grad_norm_(
-                    [p for g in self.optimizer_kg.param_groups for p in g['params']],
+                    [p for g in self.optimizer.param_groups for p in g['params']],
                     max_norm=self.clip_grad_norm
                 )
             self.optimizer.step()
 
             if self._check_nan(loss_kg + loss_rec):
                 self.logger.error(f'Loss is nan at epoch {epoch_idx}, batch {batch_idx}.', exc_info=True)
-                self.load_checkpoint()  
-                return total_loss_rec, loss_batches
+                self._load_checkpoint()  
+                return total_loss_rec, loss_batches # Next epoch
 
             total_loss_rec += loss_rec.item()
             loss_batches.append(loss_rec.item())

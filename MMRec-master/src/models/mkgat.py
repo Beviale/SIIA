@@ -31,6 +31,7 @@ class MKGAT(GeneralRecommender):
  
     def __init__(self, config, dataset):
         super(MKGAT, self).__init__(config, dataset)
+
         # load configuration
         self.embedding_dim = config['embedding_size']
         self.n_layers = config['n_layers']  
@@ -58,7 +59,7 @@ class MKGAT(GeneralRecommender):
 
     def _initialize_batches_kg(self, maximum_n_batch, min_triplets=10):
         """
-        Partitions the Knowledge Graph triplets into batches for training.
+        Partition the Knowledge Graph triplets into batches for training.
 
         This method prepares the triplet data for the Knowledge Graph embedding module. 
         It splits the total set of triplets into a specified number of batches, 
@@ -104,10 +105,10 @@ class MKGAT(GeneralRecommender):
  
     def _init_model(self):
         """
-        Initializes all the weights and some instance attributes.
+        Initialize all the weights and some instance attributes.
         """
-        self.max_structural_entity_index = max(int(entity) for entity in self.triplets.get_unique_entities_and_users()) 
-        self.max_structural_relation_index =  max(int(r) for r in self.triplets.get_unique_relations())
+        self.max_structural_entity_index = max(int(entity) for entity in self.triplets.get_unique_entities_and_users()) # The maximum index of structural entities (excluding multi-modal entities, which are appended later)
+        self.max_structural_relation_index =  max(int(r) for r in self.triplets.get_unique_relations()) # The maximum index of relations except the multi-modal ones, which are appended later.
 
         self.n_structural_entities = len(self.triplets.get_unique_entities()) 
         self.entity_embedding = nn.Embedding(self.n_structural_entities, self.embedding_dim)
@@ -132,14 +133,14 @@ class MKGAT(GeneralRecommender):
         )
         self.item_ids = [str(x) for x in sorted(int(i) for i in self.triplets.get_unique_items())]
         self.n_items = len(self.item_ids) 
-        new_triplets, n_valid_images, n_valid_texts = self._build_modality_kg_triplets() 
-        if n_valid_images is not None and n_valid_images > 0:
+        new_triplets, self.n_valid_images, self.n_valid_texts = self._build_modality_kg_triplets() 
+        if self. n_valid_images is not None and self.n_valid_images > 0:
            self.image_fc = nn.Sequential(
                 nn.Linear(self.v_feat.shape[1], self.embedding_dim),
                 nn.LeakyReLU(self.leaky_relu_slope),
                 nn.Dropout(p=self.dropout_ratio)
             )       
-        if n_valid_texts is not None and n_valid_texts > 0:
+        if self.n_valid_texts is not None and self.n_valid_texts > 0:
            self.text_fc = nn.Sequential(
                 nn.Linear(self.t_feat.shape[1], self.embedding_dim),
                 nn.LeakyReLU(self.leaky_relu_slope),
@@ -158,7 +159,7 @@ class MKGAT(GeneralRecommender):
         else:  
             self.W3 = nn.Linear(self.embedding_dim * 2, self.embedding_dim)  
 
-        self.valid_tails = {}
+        self.valid_tails = {} # Used to create the corrupted tails
         for t in self.triplets.data:
             if t.relation != "0":
                 key = (t.head, t.relation)
@@ -169,7 +170,7 @@ class MKGAT(GeneralRecommender):
     
     def _build_modality_kg_triplets(self):
         """
-        Constructs the triplets representing the associations between items 
+        Construct the triplets representing the associations between items 
         and their multimodal data (images and texts).
 
         Returns:
@@ -200,12 +201,11 @@ class MKGAT(GeneralRecommender):
                 ], dim=1)
                 raw_triplets.extend([[str(x) for x in triplet] for triplet in has_image.tolist()])
 
-        self.text_offset  = self.image_offset + n_valid_images
         # --- Relation: (item_i, hasText, text_i) ---
+        self.text_offset  = self.image_offset + n_valid_images
         if self.t_feat is not None:
             self.text_relation_index = self.max_structural_relation_index + 2
             has_t_mask = self.t_feat.abs().sum(dim=1) > 0
-            
             valid_items_t = item_ids[has_t_mask]
             valid_texts = torch.arange(len(self.t_feat), device=self.device)[has_t_mask] + self.text_offset
             n_valid_texts = len(valid_texts)
@@ -228,7 +228,7 @@ class MKGAT(GeneralRecommender):
 
     def _initialize_idxs(self):
         """
-        Sets the indices of the heads, relations and tails.
+        Set the indices of the heads, relations and tails.
         """
         head_to_idx = {}
         self.head_entity_idxs = set()
@@ -236,7 +236,7 @@ class MKGAT(GeneralRecommender):
         self.head_user_idxs = set()
         index = 0
         head_entities_without_items = self.triplets.get_all_head_entities() - set(self.item_ids)
-        self.head_entities_and_users = self.head_entities_and_users = [str(x) for x in sorted(int(i) for i in head_entities_without_items)]
+        self.head_entities_and_users = sorted(head_entities_without_items, key=lambda x: int(x))
         for entity in self.head_entities_and_users:
             head_to_idx[entity] = index
             self.head_entity_idxs.add(index)
@@ -252,6 +252,17 @@ class MKGAT(GeneralRecommender):
             self.head_user_idxs.add(index)
             index = index + 1
         self.head_to_idx = head_to_idx
+
+        triplets = self.triplets.data
+        h_indices = [head_to_idx[t.head] for t in triplets]
+        r_indices = [int(t.relation) for t in triplets]
+        
+        t_is_head, t_head_indices, t_entity_indices = zip(*[
+            (True, head_to_idx[t.tail], 0) if t.tail in head_to_idx
+            else (False, 0, int(t.tail))
+            for t in triplets
+        ])
+
 
         h_indices, r_indices, t_is_head, t_head_indices, t_entity_indices = [], [], [], [], []
         for triplet in self.triplets.data:
@@ -338,7 +349,10 @@ class MKGAT(GeneralRecommender):
         Returns:
             out: matrix of shape (n_relations, embedding_dim)
         """
-        relation_ids_int = torch.tensor([int(x) for x in relation_ids], dtype=torch.long, device=self.device)
+        if isinstance(relation_ids, torch.Tensor):
+            relation_ids_int = relation_ids.to(dtype=torch.long, device=self.device)
+        else:
+            relation_ids_int = torch.tensor([int(x) for x in relation_ids], dtype=torch.long, device=self.device)
         return self.shared_structural_fc(self.relation_embedding(relation_ids_int))
     
 
@@ -461,7 +475,7 @@ class MKGAT(GeneralRecommender):
         if batch_index < self.n_train_batches:
             batch_triplets = self.train_batches[batch_index]
         else:
-            batch_triplets = random.choice(self.batches)
+            batch_triplets = random.choice(self.train_batches)
 
         if head_emb is None:
             head_emb = self.forward_kg()
@@ -515,20 +529,20 @@ class MKGAT(GeneralRecommender):
         Returns:
             corrupted (str): the identifier of the corrupted tail entity.
         """
-        if self.v_feat is not None and triplet.relation == self.image_relation_index:
+        if self.v_feat is not None and int(triplet.relation) == self.image_relation_index:
             range_min = self.image_offset
-            range_max = self.image_offset + self.n_valid_images
-        elif self.t_feat is not None and triplet.relation == self.text_relation_index:
+            range_max = self.image_offset + self.n_valid_images - 1
+        elif self.t_feat is not None and int(triplet.relation) == self.text_relation_index:
             range_min = self.text_offset
-            range_max = self.text_offset + self.n_valid_texts
+            range_max = self.text_offset + self.n_valid_texts - 1
         else:
             range_min = self.n_users
-            range_max = self.n_structural_entities
+            range_max = self.max_structural_entity_index
 
         corrupted = str(random.randint(range_min, range_max))
         valid_tails = self.valid_tails[(triplet.head, triplet.relation)]
         while corrupted in valid_tails:
-            corrupted = random.randint(range_min, range_max)
+            corrupted = str(random.randint(range_min, range_max))
         return corrupted
     
 
@@ -568,8 +582,8 @@ class MKGAT(GeneralRecommender):
         # ── L2 Regularization ─────────────────────────────────────────────
         loss_reg = self.reg_weight * (
             self.user_embedding(user).norm(p=2).pow(2) +
-            self.entity_embedding(pos_item).norm(p=2).pow(2) +
-            self.entity_embedding(neg_item).norm(p=2).pow(2)
+            pi_emb.norm(p=2).pow(2) +  
+            ni_emb.norm(p=2).pow(2)    
         )
 
         return loss_bpr + loss_reg
