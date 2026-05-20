@@ -472,21 +472,18 @@ class MKGAT(GeneralRecommender):
             head_emb = self.forward_kg()
        
 
-        h_idx    = torch.tensor([self.head_to_idx[t.head] for t in batch_triplets])
-        h_emb    = head_emb[h_idx]  
+        batch_h_idx = torch.tensor([self.head_to_idx[t.head] for t in batch_triplets], dtype=torch.long, device=self.device)
+        batch_r_idx = torch.tensor([int(t.relation) for t in batch_triplets], dtype=torch.long, device=self.device)
+        h_emb    = head_emb[batch_h_idx]  
+        r_emb    = self._get_relation_embedding_batch(batch_r_idx)
 
-        r_ids    = torch.tensor([int(t.relation) for t in batch_triplets])
-        r_emb    = self._get_relation_embedding_batch(r_ids)
 
-
-        t_emb_list = []
-        for t in batch_triplets:
-            if t.tail in self.head_to_idx:
-                t_emb_list.append(head_emb[self.head_to_idx[t.tail]])  
-            else:
-                t_emb_list.append(self._get_entity_embedding(t.tail))
-        t_emb = torch.stack(t_emb_list, dim=0)
-        del t_emb_list
+        batch_t_is_head = torch.tensor([t.tail in self.head_to_idx for t in batch_triplets], dtype=torch.bool, device=self.device)
+        batch_t_head_idx = torch.tensor([self.head_to_idx.get(t.tail, 0) for t in batch_triplets], dtype=torch.long, device=self.device)
+        batch_t_ent_idx = torch.tensor([int(t.tail) if t.tail not in self.head_to_idx else 0 for t in batch_triplets], dtype=torch.long, device=self.device)
+        t_emb = torch.zeros(len(batch_triplets), self.embedding_dim, device=self.device)
+        t_emb[batch_t_is_head] = head_emb[batch_t_head_idx[batch_t_is_head]]
+        t_emb[~batch_t_is_head] = self._get_entity_embeddings_batch(batch_t_ent_idx[~batch_t_is_head])
 
         t_neg_emb_list = []
         for t in batch_triplets:
