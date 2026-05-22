@@ -15,6 +15,7 @@ from utils.utils import init_seed, get_model, get_trainer, dict2str
 import platform
 import os
 from common.trainer import MKGATTrainer
+import wandb
 
 
 def quick_start(model, dataset, config_dict, save_model=True, mg=False):
@@ -57,6 +58,7 @@ def quick_start(model, dataset, config_dict, save_model=True, mg=False):
         config['hyper_parameters'] = ['seed'] + config['hyper_parameters']
     for i in config['hyper_parameters']:
         hyper_ls.append(config[i] or [None])
+
     # combinations
     combinators = list(product(*hyper_ls))
     total_loops = len(combinators)
@@ -65,6 +67,16 @@ def quick_start(model, dataset, config_dict, save_model=True, mg=False):
         for j, k in zip(config['hyper_parameters'], hyper_tuple):
             config[j] = k
         init_seed(config['seed'])
+
+        # start wandb
+        run_name = "_".join([f"{j}{k}" for j, k in zip(config['hyper_parameters'], hyper_tuple)])
+        run = wandb.init(
+            project="MKGAT",
+            name=run_name, 
+            config={k: config[k] for k in config['hyper_parameters']},
+            reinit=True
+        )
+        # end wandb
 
         logger.info('========={}/{}: Parameters:{}={}======='.format(
             idx+1, total_loops, config['hyper_parameters'], hyper_tuple))
@@ -97,6 +109,9 @@ def quick_start(model, dataset, config_dict, save_model=True, mg=False):
         logger.info('████Current BEST████:\nParameters: {}={},\n'
                     'Valid: {},\nTest: {}\n\n\n'.format(config['hyper_parameters'],
             hyper_ret[best_test_idx][0], dict2str(hyper_ret[best_test_idx][1]), dict2str(hyper_ret[best_test_idx][2])))
+    
+
+    run.finish()
 
     # log info
     logger.info('\n============All Over=====================')

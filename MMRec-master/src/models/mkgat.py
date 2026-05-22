@@ -16,6 +16,7 @@ import torch.nn.functional as F
 from common.abstract_recommender import GeneralRecommender
 from common.loss import BPRLoss
 from utils.triplet import Triplet, Triplets
+import wandb
 
 
 class MKGAT(GeneralRecommender):
@@ -500,7 +501,7 @@ class MKGAT(GeneralRecommender):
         score_broken = (h_emb + r_emb - t_neg_emb).pow(2).sum(dim=-1)  # [batch]
 
         # ── Pairwise ranking loss — eq. 8 ─────────────────────────────────
-        loss_kg = -torch.log(torch.sigmoid(score_broken - score_valid)).mean()
+        loss_kg = F.softplus(score_valid - score_broken).mean()
 
         return loss_kg
 
@@ -570,8 +571,8 @@ class MKGAT(GeneralRecommender):
         # ── L2 Regularization ─────────────────────────────────────────────
         loss_reg = self.reg_weight * (
             self.user_embedding(user).norm(p=2).pow(2) +
-            pi_emb.norm(p=2).pow(2) +  
-            ni_emb.norm(p=2).pow(2)    
+            self.entity_embedding(pos_item).norm(p=2).pow(2) +
+            self.entity_embedding(neg_item).norm(p=2).pow(2)  
         )
 
         return loss_bpr + loss_reg

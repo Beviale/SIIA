@@ -11,6 +11,7 @@ import torch
 import torch.optim as optim
 from torch.nn.utils.clip_grad import clip_grad_norm_
 import numpy as np
+import wandb
 import matplotlib.pyplot as plt
 
 from time import time
@@ -112,7 +113,7 @@ class Trainer(AbstractTrainer):
         r"""Init the Optimizer
 
         Returns:
-            torch.optim: the optimizer
+            torch.optim: the optimizers
         """
         if self.learner.lower() == 'adam':
             optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
@@ -345,7 +346,7 @@ class MKGATTrainer(Trainer):
         if not os.path.exists(ckpt_path):
             self.logger.info('No checkpoint found, starting from scratch.')
             return
-        ckpt = torch.load(ckpt_path, map_location=self.device)
+        ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(ckpt['model_state_dict'])
         self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         self.optimizer_kg.load_state_dict(ckpt['optimizer_kg_state_dict'])
@@ -401,6 +402,8 @@ class MKGATTrainer(Trainer):
             if torch.is_tensor(train_loss):
                 # get nan loss
                 break
+            wandb.log({"KG+Recommendation Epoch Loss": train_loss})
+
             #for param_group in self.optimizer.param_groups:
             #    print('======lr: ', param_group['lr'])
             self.lr_scheduler.step()
@@ -480,7 +483,7 @@ class MKGATTrainer(Trainer):
             self.optimizer_kg.zero_grad()
             entities_head_emb = self.model.forward_kg()
             loss_kg = self.model.compute_kg_loss(batch_idx, entities_head_emb)
-            self.logger.info("Loss KG:" + str(loss_kg.item()))
+            self.logger.info("Loss KG: " + str(loss_kg.item()))
             loss_kg.backward()
             if self.clip_grad_norm:
                 clip_grad_norm_(
@@ -489,11 +492,12 @@ class MKGATTrainer(Trainer):
                 )
             self.optimizer_kg.step()
 
+
             # STEP 2: REC module
             self.optimizer.zero_grad()
             user_emb, item_emb = self.model.forward_rec()
             loss_rec = self.model.compute_rec_loss(interaction, user_emb, item_emb)
-            self.logger.info("Loss Rec:" + str(loss_rec.item()))
+            self.logger.info("Loss Rec: " + str(loss_rec.item()))
             loss_rec.backward()
             if self.clip_grad_norm:
                clip_grad_norm_(
@@ -509,6 +513,12 @@ class MKGATTrainer(Trainer):
 
             total_loss_rec += loss_rec.item()
             loss_batches.append(loss_rec.item())
+            wandb.log({
+                "KG Batch Loss": loss_kg.item(),
+                "Recommendation Batch Loss": loss_rec.item(),
+                "KG+Recommendation Batch Loss": loss_kg.item() + loss_rec.item()
+            })
 
-        return total_loss_rec, loss_batches
+        mean_rec_loss = total_loss_rec/len(train_data)
+        return mean_rec_loss, loss_batches
 
