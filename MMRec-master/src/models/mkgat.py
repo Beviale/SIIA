@@ -503,7 +503,9 @@ class MKGAT(GeneralRecommender):
         # ── Pairwise ranking loss — eq. 8 ─────────────────────────────────
         loss_kg = F.softplus(score_valid - score_broken).mean()
 
-        return loss_kg
+        loss_reg = self.reg_weight * sum(p.norm(p=2).pow(2) for p in self.parameters())
+
+        return loss_kg + loss_reg
 
 
 
@@ -569,11 +571,7 @@ class MKGAT(GeneralRecommender):
         loss_bpr = self.mf_loss(pos_scores, neg_scores)
 
         # ── L2 Regularization ─────────────────────────────────────────────
-        loss_reg = self.reg_weight * (
-            self.user_embedding(user).norm(p=2).pow(2) +
-            self.entity_embedding(pos_item).norm(p=2).pow(2) +
-            self.entity_embedding(neg_item).norm(p=2).pow(2)  
-        )
+        loss_reg = self.reg_weight * sum(p.norm(p=2).pow(2) for p in self.parameters())
 
         return loss_bpr + loss_reg
 

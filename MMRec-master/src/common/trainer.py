@@ -116,7 +116,7 @@ class Trainer(AbstractTrainer):
             torch.optim: the optimizers
         """
         if self.learner.lower() == 'adam':
-            optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+            optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
         elif self.learner.lower() == 'sgd':
             optimizer = optim.SGD(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
         elif self.learner.lower() == 'adagrad':
