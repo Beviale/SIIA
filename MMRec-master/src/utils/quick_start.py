@@ -71,10 +71,10 @@ def quick_start(model, dataset, config_dict, save_model=True, mg=False):
         # start wandb
         run_name = "_".join([f"{j}{k}" for j, k in zip(config['hyper_parameters'], hyper_tuple)])
         run = wandb.init(
-            project="MKGAT",
+            project=config['model'],
             name=run_name, 
             config={k: config[k] for k in config['hyper_parameters']},
-            reinit=True
+            resume="allow"
         )
         # end wandb
 

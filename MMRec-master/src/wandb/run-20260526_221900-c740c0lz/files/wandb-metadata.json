@@ -1,13 +1,13 @@
 {
   "os": "Windows-10-10.0.26200-SP0",
   "python": "CPython 3.11.15",
-  "startedAt": "2026-05-22T19:04:05.832433Z",
+  "startedAt": "2026-05-26T20:19:00.974040Z",
   "program": "C:\\Users\\bevia\\Documents\\GitHub\\SIIA\\MMRec-master\\src\\main.py",
   "codePath": "MMRec-master\\src\\main.py",
   "codePathLocal": "main.py",
   "git": {
     "remote": "https://github.com/Beviale/SIIA.git",
-    "commit": "225cdc394d5b4097f0d71f94529eefa03be68d23"
+    "commit": "f4d5c72f1a9b168ae64dc929dbef58b0d22a7ff8"
   },
   "email": "beviale@outlook.it",
   "root": "C:\\Users\\bevia\\Documents\\GitHub\\SIIA\\MMRec-master\\src",
@@ -20,7 +20,7 @@
   "disk": {
     "/": {
       "total": "510794919936",
-      "used": "331509579776"
+      "used": "326824185856"
     }
   },
   "memory": {
@@ -36,5 +36,5 @@
     }
   ],
   "cudaVersion": "13.0",
-  "writerId": "wk8w6petxm8pcs3mdbgcwms0mx2lribx"
+  "writerId": "lafo80xwr4dffbuez8gqbk1ssdma6hpu"
 }

@@ -91,7 +91,8 @@ class Trainer(AbstractTrainer):
         self.best_valid_result = tmp_dd
         self.best_test_upon_valid = tmp_dd
         self.train_loss_dict = dict()
-        self.optimizer = self._build_optimizer()
+        self.optimizer = self._build_optimizer() 
+
 
         #fac = lambda epoch: 0.96 ** (epoch / 50)
         lr_scheduler = config['learning_rate_scheduler']        # check zero?
@@ -116,7 +117,7 @@ class Trainer(AbstractTrainer):
             torch.optim: the optimizers
         """
         if self.learner.lower() == 'adam':
-            optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate)
+            optimizer = optim.Adam(self.model.parameters(), lr=self.learning_rate,  weight_decay=self.weight_decay)
         elif self.learner.lower() == 'sgd':
             optimizer = optim.SGD(self.model.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
         elif self.learner.lower() == 'adagrad':
@@ -149,7 +150,6 @@ class Trainer(AbstractTrainer):
         loss_func = loss_func or self.model.calculate_loss
         total_loss = None
         loss_batches = []
-        self._train_kg_embedding()
         for batch_idx, interaction in enumerate(train_data):
             self.optimizer.zero_grad()
             second_inter = interaction.clone()
@@ -245,6 +245,9 @@ class Trainer(AbstractTrainer):
             if torch.is_tensor(train_loss):
                 # get nan loss
                 break
+            wandb.log({
+                "Recommendation Epoch Loss": train_loss,
+            })
             
             self.lr_scheduler.step()
 
@@ -269,6 +272,9 @@ class Trainer(AbstractTrainer):
                 valid_score_output = "epoch %d evaluating [time: %.2fs, valid_score: %f]" % \
                                      (epoch_idx, valid_end_time - valid_start_time, valid_score)
                 valid_result_output = 'valid result: \n' + dict2str(valid_result)
+                wandb.log({"Recall@20": valid_result['recall@20']})
+                wandb.log({"Ndcg@20": valid_result['ndcg@20']})
+                wandb.log({"Map@20": valid_result['map@20']})
                 # test
                 _, test_result = self._valid_epoch(test_data)
                 if verbose:
@@ -338,7 +344,6 @@ class Trainer(AbstractTrainer):
 class MKGATTrainer(Trainer):
     def __init__(self, config, model, mg=False):
         super(MKGATTrainer, self).__init__(config, model, mg)
-        self.optimizer_kg = self._build_optimizer_kg()
 
     def _load_checkpoint(self):
         save_dir = self.config["checkpoint_dir"]
@@ -349,7 +354,6 @@ class MKGATTrainer(Trainer):
         ckpt = torch.load(ckpt_path, map_location=self.device, weights_only=False)
         self.model.load_state_dict(ckpt['model_state_dict'])
         self.optimizer.load_state_dict(ckpt['optimizer_state_dict'])
-        self.optimizer_kg.load_state_dict(ckpt['optimizer_kg_state_dict'])
         self.start_epoch = ckpt['epoch'] + 1
         self.best_valid_score = ckpt['best_valid_score']
         self.best_valid_result = ckpt['best_valid_result']
@@ -371,7 +375,6 @@ class MKGATTrainer(Trainer):
             'epoch': epoch_idx,
             'model_state_dict': self.model.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'optimizer_kg_state_dict': self.optimizer_kg.state_dict(),
             'best_valid_score': self.best_valid_score,
             'best_valid_result': self.best_valid_result,
             'best_test_upon_valid': self.best_test_upon_valid,
@@ -399,10 +402,9 @@ class MKGATTrainer(Trainer):
             training_start_time = time()
             self.model.pre_epoch_processing()
             train_loss, _ = self._train_epoch(train_data, epoch_idx)
-            if torch.is_tensor(train_loss):
-                # get nan loss
+            if train_loss is None:
                 break
-            wandb.log({"KG+Recommendation Epoch Loss": train_loss})
+            wandb.log({"Recommendation Epoch Loss": train_loss})
 
             #for param_group in self.optimizer.param_groups:
             #    print('======lr: ', param_group['lr'])
@@ -429,6 +431,10 @@ class MKGATTrainer(Trainer):
                 valid_score_output = "epoch %d evaluating [time: %.2fs, valid_score: %f]" % \
                                      (epoch_idx, valid_end_time - valid_start_time, valid_score)
                 valid_result_output = 'valid result: \n' + dict2str(valid_result)
+
+                wandb.log({"Recall@20": valid_result['recall@20']})
+                wandb.log({"Ndcg@20": valid_result['ndcg@20']})
+                wandb.log({"Map@20": valid_result['map@20']})
                 # test
                 _, test_result = self._valid_epoch(test_data)
                 if verbose:
@@ -453,23 +459,6 @@ class MKGATTrainer(Trainer):
                     break
         return self.best_valid_score, self.best_valid_result, self.best_test_upon_valid
 
-    def _build_optimizer_kg(self):
-        kg_params = [
-            {'params': self.model.entity_embedding.parameters()},
-            {'params': self.model.user_embedding.parameters()},
-            {'params': self.model.relation_embedding.parameters()},
-            {'params': self.model.shared_structural_fc.parameters()},
-            {'params': self.model.W1.parameters()},
-            {'params': self.model.W2.parameters()},
-        ]
-        if self.model.v_feat is not None:
-            kg_params.append({'params': self.model.image_fc.parameters()})
-        if self.model.t_feat is not None:
-            kg_params.append({'params': self.model.text_fc.parameters()})
-        return optim.Adam(kg_params, lr=self.learning_rate, 
-                         weight_decay=self.weight_decay)
-    
-
     def _train_epoch(self, train_data, epoch_idx, loss_func=None):
         if not self.req_training:
             return 0.0, []
@@ -479,46 +468,36 @@ class MKGATTrainer(Trainer):
 
         for batch_idx, interaction in enumerate(train_data):
 
-            # STEP 1: KG module
-            self.optimizer_kg.zero_grad()
+            self.optimizer.zero_grad()
             entities_head_emb = self.model.forward_kg()
             loss_kg = self.model.compute_kg_loss(batch_idx, entities_head_emb)
-            self.logger.info("Loss KG: " + str(loss_kg.item()))
+            if self._check_nan(loss_kg):
+                self.logger.error("LOSS KG NAN!")
+                return None, loss_batches
             loss_kg.backward()
             if self.clip_grad_norm:
-                clip_grad_norm_(
-                    [p for g in self.optimizer_kg.param_groups for p in g['params']],
-                    max_norm=self.clip_grad_norm
-                )
-            self.optimizer_kg.step()
+                clip_grad_norm_(self.model.parameters(), max_norm=self.clip_grad_norm)
+            self.optimizer.step()
 
-
-            # STEP 2: REC module
             self.optimizer.zero_grad()
             user_emb, item_emb = self.model.forward_rec()
             loss_rec = self.model.compute_rec_loss(interaction, user_emb, item_emb)
-            self.logger.info("Loss Rec: " + str(loss_rec.item()))
+            if self._check_nan(loss_rec):
+                self.logger.error("LOSS REC NAN!")
+                return None, loss_batches
             loss_rec.backward()
             if self.clip_grad_norm:
-               clip_grad_norm_(
-                    [p for g in self.optimizer.param_groups for p in g['params']],
-                    max_norm=self.clip_grad_norm
-                )
+                clip_grad_norm_(self.model.parameters(), max_norm=self.clip_grad_norm)
             self.optimizer.step()
-
-            if self._check_nan(loss_kg + loss_rec):
-                self.logger.error(f'Loss is nan at epoch {epoch_idx}, batch {batch_idx}.', exc_info=True)
-                self._load_checkpoint()  
-                return total_loss_rec, loss_batches # Next epoch
 
             total_loss_rec += loss_rec.item()
             loss_batches.append(loss_rec.item())
             wandb.log({
                 "KG Batch Loss": loss_kg.item(),
                 "Recommendation Batch Loss": loss_rec.item(),
-                "KG+Recommendation Batch Loss": loss_kg.item() + loss_rec.item()
-            })
+                })
 
+        self.model.update_train_batches_kg()
         mean_rec_loss = total_loss_rec/len(train_data)
         return mean_rec_loss, loss_batches
 

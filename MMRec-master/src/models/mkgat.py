@@ -39,8 +39,9 @@ class MKGAT(GeneralRecommender):
         self.reg_weight = config['reg_weight'] 
         self.aggregation = config['aggregation_type']
         self.leaky_relu_slope = config['leaky_relu_slope']
-        self.dropout_ratio = config['dropout_ratio']
-        self.modality_dropout_ratio = 0.1
+        self.modality_dropout_ratio = config['modality_dropout_ratio']
+        self.layer_norm = nn.LayerNorm(self.embedding_dim)
+        self.dropout_ratio = 0.2
 
         # load triplets
         if config['model_enriched_triples_format'] and config['dataset_support_triplets']:
@@ -51,7 +52,8 @@ class MKGAT(GeneralRecommender):
         # Initialization
         self._init_model()
         self._initialize_idxs()
-        self.train_batches = self._initialize_batches_kg(len(dataset))
+        self.lean_dataset = len(dataset)
+        self.train_batches = self._initialize_batches_kg(self.lean_dataset)
         self.n_train_batches = len(self.train_batches)
  
     # ──────────────────────────────────────────────────────────────────────────
@@ -128,10 +130,12 @@ class MKGAT(GeneralRecommender):
         nn.init.xavier_uniform_(self.user_embedding.weight)
 
         self.shared_structural_fc = nn.Sequential(
-            nn.Linear(self.embedding_dim, self.embedding_dim),
-            nn.LeakyReLU(self.leaky_relu_slope),
-            nn.Dropout(p=self.dropout_ratio)
+            nn.Linear(self.embedding_dim, self.embedding_dim, bias=False),
+            nn.LayerNorm(self.embedding_dim),
+            nn.Dropout(self.dropout_ratio),
+            nn.GELU() 
         )
+
         self.item_ids = [str(x) for x in sorted(int(i) for i in self.triplets.get_unique_items())]
         self.n_items = len(self.item_ids) 
         new_triplets, self.n_valid_images, self.n_valid_texts = self._build_modality_kg_triplets() 
@@ -139,13 +143,13 @@ class MKGAT(GeneralRecommender):
            self.image_fc = nn.Sequential(
                 nn.Linear(self.v_feat.shape[1], self.embedding_dim),
                 nn.LeakyReLU(self.leaky_relu_slope),
-                nn.Dropout(p=self.dropout_ratio)
+                nn.Dropout(self.dropout_ratio),
             )       
         if self.n_valid_texts is not None and self.n_valid_texts > 0:
            self.text_fc = nn.Sequential(
                 nn.Linear(self.t_feat.shape[1], self.embedding_dim),
                 nn.LeakyReLU(self.leaky_relu_slope),
-                nn.Dropout(p=self.dropout_ratio)
+                nn.Dropout(self.dropout_ratio),
             )
         
         self.triplets.extend(new_triplets)
@@ -154,11 +158,7 @@ class MKGAT(GeneralRecommender):
 
         self.W1 = nn.Linear(self.embedding_dim * 3, self.embedding_dim)  
         self.W2 = nn.Linear(self.embedding_dim, 1)                    
- 
-        if self.aggregation == "add":
-            self.W3 = nn.Linear(self.embedding_dim, self.embedding_dim)
-        else:  
-            self.W3 = nn.Linear(self.embedding_dim * 2, self.embedding_dim)  
+        self.W3 = nn.Linear(self.embedding_dim * 2, self.embedding_dim)  
 
         self.valid_tails = {} # Used to create the corrupted tails
         for t in self.triplets.data:
@@ -267,7 +267,7 @@ class MKGAT(GeneralRecommender):
 
         self.triplet_h_idx = torch.from_numpy(np.array(h_indices, dtype=np.int64)).to(self.device)
         self.triplet_r_idx  = torch.from_numpy(np.array(r_indices, dtype=np.int64)).to(self.device)
-        self.triplet_t_is_head = torch.from_numpy(np.array(t_is_head, dtype=np.bool)).to(self.device)
+        self.triplet_t_is_head = torch.from_numpy(np.array(t_is_head, dtype=bool)).to(self.device)
         self.triplet_t_head_idx =torch.from_numpy(np.array(t_head_indices, dtype=np.int64)).to(self.device)
         self.triplet_t_ent_idx  = torch.from_numpy(np.array(t_entity_indices, dtype=np.int64)).to(self.device)
 
@@ -308,11 +308,11 @@ class MKGAT(GeneralRecommender):
 
         if user_mask.any():
             idx = entity_ids[user_mask]
-            out[user_mask] = self.shared_structural_fc(self.user_embedding(idx))
+            out[user_mask] = self.user_projected_embeddings[idx]
 
         if entity_mask.any():
             idx = entity_ids[entity_mask] - self.n_users
-            out[entity_mask] = self.shared_structural_fc(self.entity_embedding(idx))
+            out[entity_mask] = self.entity_projected_embeddings[idx]
 
         if image_mask.any():
             idx = entity_ids[image_mask] - self.image_offset
@@ -347,7 +347,7 @@ class MKGAT(GeneralRecommender):
             relation_ids_int = relation_ids.to(dtype=torch.long, device=self.device)
         else:
             relation_ids_int = torch.tensor([int(x) for x in relation_ids], dtype=torch.long, device=self.device)
-        return self.shared_structural_fc(self.relation_embedding(relation_ids_int))
+        return self.relation_projected_embeddings[relation_ids_int]
     
 
 
@@ -384,7 +384,7 @@ class MKGAT(GeneralRecommender):
         e_hrt = self.W1(torch.cat([h, r, t], dim=-1))
         
         # π̃(h,r,t) = LeakyReLU(W2 * e(h,r,t))  — eq. 3
-        attn_logits = F.leaky_relu(self.W2(e_hrt)).squeeze(-1)  # [n_triplets]
+        attn_logits = F.leaky_relu(self.W2(e_hrt), negative_slope=self.leaky_relu_slope).squeeze(-1)  # [n_triplets]
 
         attn = self._scatter_softmax(attn_logits, self.triplet_h_idx, head_emb.shape[0])
 
@@ -394,16 +394,15 @@ class MKGAT(GeneralRecommender):
         e_agg.scatter_add_(0, self.triplet_h_idx.unsqueeze(1).expand_as(e_hrt),
                     attn.unsqueeze(1) * e_hrt)
         
-        if self.aggregation == "add":
-            new_head_emb = self.W3(head_emb) + e_agg
-        else:
-            new_head_emb = self.W3(torch.cat([head_emb, e_agg], dim=-1))
-
+        new_head_emb = self.W3(torch.cat([head_emb, e_agg], dim=-1))
+        #new_head_emb = head_emb + update
+        #new_head_emb = self.layer_norm(new_head_emb)
         return new_head_emb  
     
     # ──────────────────────────────────────────────────────────────────────────
     # Forward
     # ──────────────────────────────────────────────────────────────────────────
+
  
     def forward_kg(self):
         """
@@ -414,12 +413,21 @@ class MKGAT(GeneralRecommender):
                 containing the updated embeddings of all head entities,
                 excluding users.
         """
+        self.entity_projected_embeddings = self.shared_structural_fc(
+            self.entity_embedding.weight
+        )
+        self.relation_projected_embeddings = self.shared_structural_fc(
+            self.relation_embedding.weight
+        )
+        self.user_projected_embeddings = self.shared_structural_fc(
+            self.user_embedding.weight
+        )
         head_embs = self._get_head_embeddings()
  
         # Propagate over the multi-modal KG to learn knowledge-aware entity emb
         for _ in range(self.n_layers):
             head_embs = self._mkg_attention_layer(head_embs)
-        return head_embs[list(self.head_entity_idxs | self.head_item_idxs)]
+        return head_embs
      
 
     def forward_rec(self):
@@ -432,6 +440,16 @@ class MKGAT(GeneralRecommender):
             item_all_embeddings (Tensor): matrix of shape (n_items, embedding_dim * (n_layers + 1))
                 containing the aggregated embeddings of all items across all layers.
         """
+        self.entity_projected_embeddings = self.shared_structural_fc(
+            self.entity_embedding.weight
+        )
+        self.relation_projected_embeddings = self.shared_structural_fc(
+            self.relation_embedding.weight
+        )
+        self.user_projected_embeddings = self.shared_structural_fc(
+            self.user_embedding.weight
+        )
+
         all_head_emb = self._get_head_embeddings()
 
         layer_outputs_users = [all_head_emb[self.head_user_idx_tensor]]
@@ -486,15 +504,24 @@ class MKGAT(GeneralRecommender):
         t_emb[batch_t_is_head] = head_emb[batch_t_head_idx[batch_t_is_head]]
         t_emb[~batch_t_is_head] = self._get_entity_embeddings_batch(batch_t_ent_idx[~batch_t_is_head])
 
-        t_neg_emb_list = []
-        for t in batch_triplets:
-            t_neg_id = self._corrupt_tail_for_relation(t)
-            if t_neg_id in self.head_to_idx:
-                t_neg_emb_list.append(head_emb[self.head_to_idx[t_neg_id]])
-            else:
-                t_neg_emb_list.append(self._get_entity_embedding(t_neg_id))
-        t_neg_emb = torch.stack(t_neg_emb_list, dim=0)
-        del t_neg_emb_list
+        
+        t_neg_ids = [self._corrupt_tail_for_relation(t) for t in batch_triplets]
+        is_head_mask = torch.tensor([nid in self.head_to_idx for nid in t_neg_ids], dtype=torch.bool, device=self.device)
+        t_neg_emb = torch.zeros(len(batch_triplets), self.embedding_dim, device=self.device)
+        if is_head_mask.any():
+            head_mapped_idxs = torch.tensor(
+                [self.head_to_idx[nid] for nid, is_head in zip(t_neg_ids, is_head_mask.tolist()) if is_head], 
+                dtype=torch.long, 
+                device=self.device
+            )
+            t_neg_emb[is_head_mask] = head_emb[head_mapped_idxs]
+        if (~is_head_mask).any():
+            t_neg_ids_int = torch.tensor([int(nid) for nid in t_neg_ids], dtype=torch.long, device=self.device)
+            remaining_ids = t_neg_ids_int[~is_head_mask]
+            t_neg_emb[~is_head_mask] = self._get_entity_embeddings_batch(remaining_ids)
+
+
+
 
         # ── TransE scoring — eq. 7 ────────────────────────────────────────
         score_valid  = (h_emb + r_emb - t_emb).pow(2).sum(dim=-1)  # [batch]
@@ -503,9 +530,7 @@ class MKGAT(GeneralRecommender):
         # ── Pairwise ranking loss — eq. 8 ─────────────────────────────────
         loss_kg = F.softplus(score_valid - score_broken).mean()
 
-        loss_reg = self.reg_weight * sum(p.norm(p=2).pow(2) for p in self.parameters())
-
-        return loss_kg + loss_reg
+        return loss_kg 
 
 
 
@@ -570,10 +595,14 @@ class MKGAT(GeneralRecommender):
 
         loss_bpr = self.mf_loss(pos_scores, neg_scores)
 
-        # ── L2 Regularization ─────────────────────────────────────────────
-        loss_reg = self.reg_weight * sum(p.norm(p=2).pow(2) for p in self.parameters())
+        u_base_emb = self.user_embedding(user)
+        pi_base_emb = self.entity_embedding(pos_item)
+        ni_base_emb = self.entity_embedding(neg_item)
 
-        return loss_bpr + loss_reg
+        reg_loss = self.reg_weight * (u_base_emb.pow(2).sum() + pi_base_emb.pow(2).sum() + ni_base_emb.pow(2).sum())
+
+        return loss_bpr + reg_loss 
+
 
        
  
@@ -621,3 +650,9 @@ class MKGAT(GeneralRecommender):
         out_sum.index_add_(0, index, out)
         
         return out / (out_sum[index] + 1e-16)
+    
+
+    def update_train_batches_kg(self):
+        self.train_batches = self._initialize_batches_kg( self.lean_dataset)
+        self.n_train_batches = len(self.train_batches)
+        

@@ -2,7 +2,7 @@
 gpu_id: 0
 use_gpu: True
 seed: [999]
-F
+
 # multi-modal raw features
 data_path: '../data/'
 inter_splitting_label: 'x_label'
@@ -19,12 +19,12 @@ req_training: True
 #embedding_size: 3780
 
 # training settings
-epochs: 1000
+epochs: 200
 stopping_step: 20
 train_batch_size: 2048
 learner: adam
 learning_rate: 0.001
-learning_rate_scheduler: [1.0, 50]
+learning_rate_scheduler:  [1, 50]
 eval_step: 1
 
 training_neg_sample_num: 1

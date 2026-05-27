@@ -156,7 +156,7 @@ def construct_triplets_json(dataset_name, interact_file_name, metadata_id_field,
                 line = "\t".join(map(str, triple))
                 f.write(line + "\n")
             
-#construct_triplets_json("baby", "baby.inter", "asin", ["brand", "related/also_bought"])
+construct_triplets_json("baby", "baby.inter", "asin", ["brand", "related/also_bought"])
 
 
 
@@ -263,7 +263,7 @@ def construct_triplets(dataset_name, interact_file_name, additional_triplets_fil
                 line = "\t".join(map(str, triple))
                 f.write(line + "\n")
             
-construct_triplets("movielens", "movielens_1m.inter", "ml25m_dbpedia_1hop.tsv")
+#construct_triplets("movielens", "movielens_1m.inter", "ml25m_dbpedia_1hop.tsv")
 
 
 
