@@ -403,7 +403,6 @@ class MKGAT(GeneralRecommender):
     # Forward
     # ──────────────────────────────────────────────────────────────────────────
 
- 
     def forward_kg(self):
         """
         Perform the forward pass of the Knowledge Graph Embedding module.
@@ -520,17 +519,50 @@ class MKGAT(GeneralRecommender):
             remaining_ids = t_neg_ids_int[~is_head_mask]
             t_neg_emb[~is_head_mask] = self._get_entity_embeddings_batch(remaining_ids)
 
-
-
-
         # ── TransE scoring — eq. 7 ────────────────────────────────────────
-        score_valid  = (h_emb + r_emb - t_emb).pow(2).sum(dim=-1)  # [batch]
-        score_broken = (h_emb + r_emb - t_neg_emb).pow(2).sum(dim=-1)  # [batch]
+        score_valid  = (h_emb + r_emb - t_emb).pow(2).sum(dim=-1) 
+        score_broken = (h_emb + r_emb - t_neg_emb).pow(2).sum(dim=-1)  
 
         # ── Pairwise ranking loss — eq. 8 ─────────────────────────────────
         loss_kg = F.softplus(score_valid - score_broken).mean()
 
-        return loss_kg 
+
+        # ── Modality contrastive loss ─────────────────────────────────────
+        if self.v_feat is not None and self.t_feat is not None:
+            image_mask = batch_r_idx == self.image_relation_index  
+            text_mask  = batch_r_idx == self.text_relation_index       
+            t_emb_not_zero = t_emb.abs().sum(dim=-1) > 0
+            valid_image_mask = image_mask & t_emb_not_zero
+            valid_text_mask  = text_mask & t_emb_not_zero
+            if valid_image_mask.any() and valid_text_mask.any():
+                image_item_heads = batch_h_idx[valid_image_mask]  
+                text_item_heads  = batch_h_idx[valid_text_mask]   
+        
+            heads = set(image_item_heads.tolist()) & set(text_item_heads.tolist())
+
+            if len(heads) >= 2:
+            
+                common_heads_tensor = torch.tensor(list(heads), device=self.device)
+            
+                final_image_mask = valid_image_mask & torch.isin(batch_h_idx, common_heads_tensor)
+                final_text_mask  = valid_text_mask & torch.isin(batch_h_idx, common_heads_tensor)
+            
+                img_heads_filtered = batch_h_idx[final_image_mask]
+                txt_heads_filtered = batch_h_idx[final_text_mask]
+            
+                v_sort_idx = torch.argsort(img_heads_filtered)
+                t_sort_idx = torch.argsort(txt_heads_filtered)
+            
+                z_v = F.normalize(t_emb[final_image_mask][v_sort_idx], dim=-1)  
+                z_t = F.normalize(t_emb[final_text_mask][t_sort_idx], dim=-1)  
+
+                logits = torch.matmul(z_v, z_t.T) / self.cl_temperature  
+                labels = torch.arange(len(z_v), device=self.device)
+
+                loss_cl = (F.cross_entropy(logits, labels) +
+                        F.cross_entropy(logits.T, labels)) / 2.0
+                final_loss = loss_kg + self.cl_weight * loss_cl
+        return final_loss
 
 
 
