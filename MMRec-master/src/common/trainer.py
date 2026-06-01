@@ -272,9 +272,11 @@ class Trainer(AbstractTrainer):
                 valid_score_output = "epoch %d evaluating [time: %.2fs, valid_score: %f]" % \
                                      (epoch_idx, valid_end_time - valid_start_time, valid_score)
                 valid_result_output = 'valid result: \n' + dict2str(valid_result)
-                wandb.log({"Recall@20": valid_result['recall@20']})
-                wandb.log({"Ndcg@20": valid_result['ndcg@20']})
-                wandb.log({"Map@20": valid_result['map@20']})
+                wandb.log({
+                    "Recall@20": valid_result['recall@20'],
+                    "Ndcg@20": valid_result['ndcg@20'],
+                    "Map@20": valid_result['map@20']
+                })
                 # test
                 _, test_result = self._valid_epoch(test_data)
                 if verbose:
@@ -342,12 +344,13 @@ class Trainer(AbstractTrainer):
     
 
 class MKGATTrainer(Trainer):
-    def __init__(self, config, model, mg=False):
+    def __init__(self, config, model, run_name, mg=False):
         super(MKGATTrainer, self).__init__(config, model, mg)
+        self.run_name = run_name
 
     def _load_checkpoint(self):
         save_dir = self.config["checkpoint_dir"]
-        ckpt_path = os.path.join(save_dir, f'{self.config["model"]}-{self.config["dataset"]}-best.pth')
+        ckpt_path = os.path.join(save_dir, f'{self.config["model"]}-{self.run_name}-best.pth')
         if not os.path.exists(ckpt_path):
             self.logger.info('No checkpoint found, starting from scratch.')
             return
@@ -369,7 +372,7 @@ class MKGATTrainer(Trainer):
         os.makedirs(save_dir, exist_ok=True)
         ckpt_path = os.path.join(
             save_dir,
-            f'{self.config["model"]}-{self.config["dataset"]}-best.pth'
+            f'{self.config["model"]}-{self.run_name}-best.pth'
         )
         torch.save({
             'epoch': epoch_idx,
@@ -431,10 +434,11 @@ class MKGATTrainer(Trainer):
                 valid_score_output = "epoch %d evaluating [time: %.2fs, valid_score: %f]" % \
                                      (epoch_idx, valid_end_time - valid_start_time, valid_score)
                 valid_result_output = 'valid result: \n' + dict2str(valid_result)
-
-                wandb.log({"Recall@20": valid_result['recall@20']})
-                wandb.log({"Ndcg@20": valid_result['ndcg@20']})
-                wandb.log({"Map@20": valid_result['map@20']})
+                wandb.log({
+                    "Recall@20": valid_result['recall@20'],
+                    "Ndcg@20": valid_result['ndcg@20'],
+                    "Map@20": valid_result['map@20']
+                })
                 # test
                 _, test_result = self._valid_epoch(test_data)
                 if verbose:

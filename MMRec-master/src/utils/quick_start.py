@@ -69,12 +69,12 @@ def quick_start(model, dataset, config_dict, save_model=True, mg=False):
         init_seed(config['seed'])
 
         # start wandb
-        run_name = "_".join([f"{j}{k}" for j, k in zip(config['hyper_parameters'], hyper_tuple)])
+        run_name = config['dataset'] + "_"
+        run_name = run_name + "_".join([f"{j}{k}" for j, k in zip(config['hyper_parameters'], hyper_tuple)])
         run = wandb.init(
             project=config['model'],
             name=run_name, 
             config={k: config[k] for k in config['hyper_parameters']},
-            resume="allow"
         )
         # end wandb
 
@@ -89,7 +89,7 @@ def quick_start(model, dataset, config_dict, save_model=True, mg=False):
 
         # trainer loading and initialization
         if config['model'] == "MKGAT":
-            trainer = MKGATTrainer(config, model, mg)
+            trainer = MKGATTrainer(config, model, run_name, mg)
         else:
             trainer = get_trainer()(config, model, mg)
         # debug
@@ -111,7 +111,7 @@ def quick_start(model, dataset, config_dict, save_model=True, mg=False):
             hyper_ret[best_test_idx][0], dict2str(hyper_ret[best_test_idx][1]), dict2str(hyper_ret[best_test_idx][2])))
     
 
-    run.finish()
+        run.finish()
 
     # log info
     logger.info('\n============All Over=====================')
