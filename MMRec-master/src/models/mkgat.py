@@ -16,7 +16,7 @@ import torch.nn.functional as F
 from common.abstract_recommender import GeneralRecommender
 from common.loss import BPRLoss
 from utils.triplet import Triplet, Triplets
-import wandb
+from collections import defaultdict
 
 
 class MKGAT(GeneralRecommender):
@@ -60,6 +60,34 @@ class MKGAT(GeneralRecommender):
     # Initialization
     # ──────────────────────────────────────────────────────────────────────────
 
+
+    def _shuffle_triplets(self, triplets):
+        """
+        Shuffles triplets by grouping image and text relations of the same item (head)
+        together, ensuring they stay adjacent before batch slicing.
+        """
+        mm_groups = defaultdict(list)
+        other_triplets = []
+
+        for triplet in triplets:  
+            h, r = triplet.head, triplet.relation
+            if int(r) == self.image_relation_index or int(r) == self.text_relation_index:
+                mm_groups[h].append(triplet)
+            else:
+                other_triplets.append(triplet)
+           
+        master_groups = list(mm_groups.values())
+        for triplet in other_triplets:
+            master_groups.append([triplet])
+
+        random.shuffle(master_groups)
+
+        shuffled_triplets = [triplet for group in master_groups for triplet in group]
+
+        return shuffled_triplets
+
+
+
     def _initialize_batches_kg(self, maximum_n_batch, min_triplets=10):
         """
         Partition the Knowledge Graph triplets into batches for training.
@@ -82,7 +110,7 @@ class MKGAT(GeneralRecommender):
             bathces: a list containing all the created batches.
         """
         all_triplets = self.triplets.get_entity_triplets().copy()
-        random.shuffle(all_triplets)
+        all_triplets = self._shuffle_triplets(all_triplets)
         
         total = len(all_triplets)
         
@@ -531,12 +559,9 @@ class MKGAT(GeneralRecommender):
         if self.v_feat is not None and self.t_feat is not None:
             image_mask = batch_r_idx == self.image_relation_index  
             text_mask  = batch_r_idx == self.text_relation_index       
-            t_emb_not_zero = t_emb.abs().sum(dim=-1) > 0
-            valid_image_mask = image_mask & t_emb_not_zero
-            valid_text_mask  = text_mask & t_emb_not_zero
-            if valid_image_mask.any() and valid_text_mask.any():
-                image_item_heads = batch_h_idx[valid_image_mask]  
-                text_item_heads  = batch_h_idx[valid_text_mask]   
+            if image_mask.any() and text_mask.any():
+                image_item_heads = batch_h_idx[image_mask]  
+                text_item_heads  = batch_h_idx[text_mask]   
         
             heads = set(image_item_heads.tolist()) & set(text_item_heads.tolist())
 
@@ -544,8 +569,8 @@ class MKGAT(GeneralRecommender):
             
                 common_heads_tensor = torch.tensor(list(heads), device=self.device)
             
-                final_image_mask = valid_image_mask & torch.isin(batch_h_idx, common_heads_tensor)
-                final_text_mask  = valid_text_mask & torch.isin(batch_h_idx, common_heads_tensor)
+                final_image_mask = image_mask & torch.isin(batch_h_idx, common_heads_tensor)
+                final_text_mask  = text_mask & torch.isin(batch_h_idx, common_heads_tensor)
             
                 img_heads_filtered = batch_h_idx[final_image_mask]
                 txt_heads_filtered = batch_h_idx[final_text_mask]
@@ -556,13 +581,15 @@ class MKGAT(GeneralRecommender):
                 z_v = F.normalize(t_emb[final_image_mask][v_sort_idx], dim=-1)  
                 z_t = F.normalize(t_emb[final_text_mask][t_sort_idx], dim=-1)  
 
-                logits = torch.matmul(z_v, z_t.T) / self.cl_temperature  
+                logits = torch.matmul(z_v, z_t.T) / 0.07
                 labels = torch.arange(len(z_v), device=self.device)
 
                 loss_cl = (F.cross_entropy(logits, labels) +
                         F.cross_entropy(logits.T, labels)) / 2.0
-                final_loss = loss_kg + self.cl_weight * loss_cl
-        return final_loss
+                final_loss = loss_kg + loss_cl
+    
+                return final_loss
+        return loss_kg
 
 
 
