@@ -560,35 +560,35 @@ class MKGAT(GeneralRecommender):
             image_mask = batch_r_idx == self.image_relation_index  
             text_mask  = batch_r_idx == self.text_relation_index       
             if image_mask.any() and text_mask.any():
-                image_item_heads = batch_h_idx[image_mask]  
-                text_item_heads  = batch_h_idx[text_mask]   
-        
-            heads = set(image_item_heads.tolist()) & set(text_item_heads.tolist())
+                image_item_heads = batch_h_idx[image_mask]
+                text_item_heads  = batch_h_idx[text_mask]
 
-            if len(heads) >= 2:
-            
-                common_heads_tensor = torch.tensor(list(heads), device=self.device)
-            
-                final_image_mask = image_mask & torch.isin(batch_h_idx, common_heads_tensor)
-                final_text_mask  = text_mask & torch.isin(batch_h_idx, common_heads_tensor)
-            
-                img_heads_filtered = batch_h_idx[final_image_mask]
-                txt_heads_filtered = batch_h_idx[final_text_mask]
-            
-                v_sort_idx = torch.argsort(img_heads_filtered)
-                t_sort_idx = torch.argsort(txt_heads_filtered)
-            
-                z_v = F.normalize(t_emb[final_image_mask][v_sort_idx], dim=-1)  
-                z_t = F.normalize(t_emb[final_text_mask][t_sort_idx], dim=-1)  
+                heads = set(image_item_heads.tolist()) & set(text_item_heads.tolist())
 
-                logits = torch.matmul(z_v, z_t.T) / 0.07
-                labels = torch.arange(len(z_v), device=self.device)
+                if len(heads) >= 2:
 
-                loss_cl = (F.cross_entropy(logits, labels) +
-                        F.cross_entropy(logits.T, labels)) / 2.0
-                final_loss = loss_kg + loss_cl
-    
-                return final_loss
+                    common_heads_tensor = torch.tensor(list(heads), device=self.device)
+
+                    final_image_mask = image_mask & torch.isin(batch_h_idx, common_heads_tensor)
+                    final_text_mask  = text_mask & torch.isin(batch_h_idx, common_heads_tensor)
+
+                    img_heads_filtered = batch_h_idx[final_image_mask]
+                    txt_heads_filtered = batch_h_idx[final_text_mask]
+
+                    v_sort_idx = torch.argsort(img_heads_filtered)
+                    t_sort_idx = torch.argsort(txt_heads_filtered)
+
+                    z_v = F.normalize(t_emb[final_image_mask][v_sort_idx], dim=-1)
+                    z_t = F.normalize(t_emb[final_text_mask][t_sort_idx], dim=-1)
+
+                    logits = torch.matmul(z_v, z_t.T) / 0.07
+                    labels = torch.arange(len(z_v), device=self.device)
+
+                    loss_cl = (F.cross_entropy(logits, labels) +
+                            F.cross_entropy(logits.T, labels)) / 2.0
+                    final_loss = loss_kg + loss_cl
+
+                    return final_loss
         return loss_kg
 
 
