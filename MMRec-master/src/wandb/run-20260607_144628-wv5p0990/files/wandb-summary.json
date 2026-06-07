@@ -1,0 +1,1 @@
+{"Recommendation Epoch Loss":16.22810533642769,"_timestamp":1.780836800133294e+09,"Recall@20":0.0687,"Ndcg@20":0.0301,"Map@20":0.0191,"_wandb":{"runtime":412},"_runtime":412,"_step":193}

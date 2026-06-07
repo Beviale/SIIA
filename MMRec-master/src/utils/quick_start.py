@@ -69,7 +69,8 @@ def quick_start(model, dataset, config_dict, save_model=True, mg=False):
         init_seed(config['seed'])
 
         # start wandb
-        run_name = config['dataset'] + "_"
+        _contrastive = config['use_contrastive'] if config['use_contrastive'] is not None else False
+        run_name = f"contrastive{_contrastive}_" + config['dataset'] + "_"
         run_name = run_name + "_".join([f"{j}{k}" for j, k in zip(config['hyper_parameters'], hyper_tuple)])
         run = wandb.init(
             project=config['model'],

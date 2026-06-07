@@ -1,0 +1,1 @@
+{"_wandb":{"runtime":387},"_runtime":387,"_step":181,"Recommendation Epoch Loss":16.691008538007736,"_timestamp":1.780836005405926e+09,"Recall@20":0.0686,"Ndcg@20":0.03,"Map@20":0.019}

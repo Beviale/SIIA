@@ -40,8 +40,13 @@ class MKGAT(GeneralRecommender):
         self.aggregation = config['aggregation_type']
         self.leaky_relu_slope = config['leaky_relu_slope']
         self.modality_dropout_ratio = config['modality_dropout_ratio']
-        self.layer_norm = nn.LayerNorm(self.embedding_dim)
-        self.dropout_ratio = 0.2
+        self.kg_loss_weight = config['kg_loss_weight'] \
+            if config['kg_loss_weight'] is not None else 1.0
+        self.use_contrastive = config['use_contrastive'] \
+            if config['use_contrastive'] is not None else False
+        self.use_layernorm = config['use_layernorm'] \
+            if config['use_layernorm'] is not None else True
+        self.dropout_ratio = config['dropout_ratio'] if config['dropout_ratio'] is not None else 0.2
 
         # load triplets
         if config['model_enriched_triples_format'] and config['dataset_support_triplets']:
@@ -146,9 +151,10 @@ class MKGAT(GeneralRecommender):
         nn.init.xavier_uniform_(self.entity_embedding.weight)
         
 
-        self.n_relations = (self.max_structural_relation_index + 1) \
+        self.n_base_relations = (self.max_structural_relation_index + 1) \
                  + (1 if self.v_feat is not None else 0) \
                  + (1 if self.t_feat is not None else 0)
+        self.n_relations = 2 * self.n_base_relations
         self.relation_embedding = nn.Embedding(self.n_relations, self.embedding_dim)
         nn.init.xavier_uniform_(self.relation_embedding.weight)
     
@@ -159,9 +165,9 @@ class MKGAT(GeneralRecommender):
 
         self.shared_structural_fc = nn.Sequential(
             nn.Linear(self.embedding_dim, self.embedding_dim, bias=False),
-            nn.LayerNorm(self.embedding_dim),
+            nn.LayerNorm(self.embedding_dim) if self.use_layernorm else nn.Identity(),
+            nn.GELU(),
             nn.Dropout(self.dropout_ratio),
-            nn.GELU() 
         )
 
         self.item_ids = [str(x) for x in sorted(int(i) for i in self.triplets.get_unique_items())]
@@ -184,9 +190,9 @@ class MKGAT(GeneralRecommender):
 
         self.mf_loss = BPRLoss()
 
-        self.W1 = nn.Linear(self.embedding_dim * 3, self.embedding_dim)  
-        self.W2 = nn.Linear(self.embedding_dim, 1)                    
-        self.W3 = nn.Linear(self.embedding_dim * 2, self.embedding_dim)  
+        self.W1 = nn.Sequential(nn.Linear(self.embedding_dim * 3, self.embedding_dim), nn.Dropout(self.dropout_ratio))  
+        self.W2 = nn.Sequential(nn.Linear(self.embedding_dim, 1), nn.Dropout(self.dropout_ratio))            
+        self.W3 = nn.Sequential(nn.Linear(self.embedding_dim * 2, self.embedding_dim), nn.Dropout(self.dropout_ratio))  
 
         self.valid_tails = {} # Used to create the corrupted tails
         for t in self.triplets.data:
@@ -257,50 +263,37 @@ class MKGAT(GeneralRecommender):
 
     def _initialize_idxs(self):
         """
-        Set the indices of the heads, relations and tails.
+        Set up the propagation graph index tensors.
+
+        Every graph node (user, item, KG entity, image, text) has a contiguous
+        integer id in [0, n_nodes), so head_emb is indexed directly by entity id
+        and no id->position mapping is needed. Bidirectional (KGAT-style)
+        propagation is built unconditionally: for each (h, r, t) a reverse edge
+        (t, r + n_base_relations, h) is added.
         """
-        head_to_idx = {}
-        self.head_entity_idxs = set()
-        self.head_item_idxs = set()
-        self.head_user_idxs = set()
-        index = 0
-        head_entities_without_items = self.triplets.get_all_head_entities() - set(self.item_ids)
-        self.head_entities_and_users = sorted(head_entities_without_items, key=lambda x: int(x))
-        for entity in self.head_entities_and_users:
-            head_to_idx[entity] = index
-            self.head_entity_idxs.add(index)
-            index = index + 1
-        self.head_entities_and_users.extend(self.item_ids)
-        for item_id in self.item_ids:
-            head_to_idx[item_id] = index
-            self.head_item_idxs.add(index)
-            index = index + 1
-        self.head_entities_and_users.extend(self.user_ids)
-        for user_id in self.user_ids:
-            head_to_idx[user_id] = index
-            self.head_user_idxs.add(index)
-            index = index + 1
-        self.head_to_idx = head_to_idx
+        self.n_nodes = self.text_offset + self.n_valid_texts
+
+        self.all_node_ids = torch.arange(self.n_nodes, dtype=torch.long, device=self.device)
 
         triplets = self.triplets.data
-        h_indices = [head_to_idx[t.head] for t in triplets]
+        h_indices = [int(t.head) for t in triplets]
         r_indices = [int(t.relation) for t in triplets]
-        
-        t_is_head, t_head_indices, t_entity_indices = zip(*[
-            (True, head_to_idx[t.tail], 0) if t.tail in head_to_idx
-            else (False, 0, int(t.tail))
-            for t in triplets
-        ])
+        t_indices = [int(t.tail) for t in triplets]
 
+        # KGAT-style reverse edges for every relation 
+        rev_h = list(t_indices)
+        rev_r = [r + self.n_base_relations for r in r_indices]
+        rev_t = list(h_indices)
+        h_indices += rev_h
+        r_indices += rev_r
+        t_indices += rev_t
 
-        self.triplet_h_idx = torch.from_numpy(np.array(h_indices, dtype=np.int64)).to(self.device)
-        self.triplet_r_idx  = torch.from_numpy(np.array(r_indices, dtype=np.int64)).to(self.device)
-        self.triplet_t_is_head = torch.from_numpy(np.array(t_is_head, dtype=bool)).to(self.device)
-        self.triplet_t_head_idx =torch.from_numpy(np.array(t_head_indices, dtype=np.int64)).to(self.device)
-        self.triplet_t_ent_idx  = torch.from_numpy(np.array(t_entity_indices, dtype=np.int64)).to(self.device)
+        self.triplet_h_idx = torch.tensor(h_indices, dtype=torch.long, device=self.device)
+        self.triplet_r_idx = torch.tensor(r_indices, dtype=torch.long, device=self.device)
+        self.triplet_t_idx = torch.tensor(t_indices, dtype=torch.long, device=self.device)
 
-        self.head_user_idx_tensor = torch.tensor(sorted(self.head_user_idxs), dtype=torch.long, device=self.device)
-        self.head_item_idx_tensor = torch.tensor(sorted(self.head_item_idxs), dtype=torch.long, device=self.device)
+        self.head_user_idx_tensor = torch.tensor([int(u) for u in self.user_ids], dtype=torch.long, device=self.device)
+        self.head_item_idx_tensor = torch.tensor([int(i) for i in self.item_ids], dtype=torch.long, device=self.device)
 
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -385,7 +378,7 @@ class MKGAT(GeneralRecommender):
         Returns:
             Tensor: matrix of shape (n_head_entities, embedding_dim)
         """
-        return self._get_entity_embeddings_batch(self.head_entities_and_users)
+        return self._get_entity_embeddings_batch(self.all_node_ids)
 
       
     # ──────────────────────────────────────────────────────────────────────────
@@ -404,9 +397,7 @@ class MKGAT(GeneralRecommender):
         h = head_emb[self.triplet_h_idx]
         r = self._get_relation_embedding_batch(self.triplet_r_idx) 
        
-        t_from_head   = head_emb[self.triplet_t_head_idx]
-        t_from_entity = self._get_entity_embeddings_batch(self.triplet_t_ent_idx)
-        t = torch.where(self.triplet_t_is_head.unsqueeze(1), t_from_head, t_from_entity)
+        t = head_emb[self.triplet_t_idx]   
       
         # e(h,r,t) = W1 * [h || r || t]  — eq. 2
         e_hrt = self.W1(torch.cat([h, r, t], dim=-1))
@@ -518,77 +509,58 @@ class MKGAT(GeneralRecommender):
             head_emb = self.forward_kg()
        
 
-        batch_h_idx = torch.tensor([self.head_to_idx[t.head] for t in batch_triplets], dtype=torch.long, device=self.device)
+        batch_h_idx = torch.tensor([int(t.head) for t in batch_triplets], dtype=torch.long, device=self.device)
         batch_r_idx = torch.tensor([int(t.relation) for t in batch_triplets], dtype=torch.long, device=self.device)
-        h_emb    = head_emb[batch_h_idx]  
+        h_emb    = head_emb[batch_h_idx]
         r_emb    = self._get_relation_embedding_batch(batch_r_idx)
 
+        batch_t_idx = torch.tensor([int(t.tail) for t in batch_triplets], dtype=torch.long, device=self.device)
+        t_emb = head_emb[batch_t_idx]
 
-        batch_t_is_head = torch.tensor([t.tail in self.head_to_idx for t in batch_triplets], dtype=torch.bool, device=self.device)
-        batch_t_head_idx = torch.tensor([self.head_to_idx.get(t.tail, 0) for t in batch_triplets], dtype=torch.long, device=self.device)
-        batch_t_ent_idx = torch.tensor([int(t.tail) if t.tail not in self.head_to_idx else 0 for t in batch_triplets], dtype=torch.long, device=self.device)
-        t_emb = torch.zeros(len(batch_triplets), self.embedding_dim, device=self.device)
-        t_emb[batch_t_is_head] = head_emb[batch_t_head_idx[batch_t_is_head]]
-        t_emb[~batch_t_is_head] = self._get_entity_embeddings_batch(batch_t_ent_idx[~batch_t_is_head])
-
-        
-        t_neg_ids = [self._corrupt_tail_for_relation(t) for t in batch_triplets]
-        is_head_mask = torch.tensor([nid in self.head_to_idx for nid in t_neg_ids], dtype=torch.bool, device=self.device)
-        t_neg_emb = torch.zeros(len(batch_triplets), self.embedding_dim, device=self.device)
-        if is_head_mask.any():
-            head_mapped_idxs = torch.tensor(
-                [self.head_to_idx[nid] for nid, is_head in zip(t_neg_ids, is_head_mask.tolist()) if is_head], 
-                dtype=torch.long, 
-                device=self.device
-            )
-            t_neg_emb[is_head_mask] = head_emb[head_mapped_idxs]
-        if (~is_head_mask).any():
-            t_neg_ids_int = torch.tensor([int(nid) for nid in t_neg_ids], dtype=torch.long, device=self.device)
-            remaining_ids = t_neg_ids_int[~is_head_mask]
-            t_neg_emb[~is_head_mask] = self._get_entity_embeddings_batch(remaining_ids)
+        t_neg_idx = torch.tensor([int(self._corrupt_tail_for_relation(t)) for t in batch_triplets], dtype=torch.long, device=self.device)
+        t_neg_emb = head_emb[t_neg_idx]
 
         # ── TransE scoring — eq. 7 ────────────────────────────────────────
         score_valid  = (h_emb + r_emb - t_emb).pow(2).sum(dim=-1) 
         score_broken = (h_emb + r_emb - t_neg_emb).pow(2).sum(dim=-1)  
 
         # ── Pairwise ranking loss — eq. 8 ─────────────────────────────────
-        loss_kg = F.softplus(score_valid - score_broken).mean()
+        loss_kg = self.kg_loss_weight * F.softplus(score_valid - score_broken).mean()
 
 
-        # ── Modality contrastive loss ─────────────────────────────────────
-        if self.v_feat is not None and self.t_feat is not None:
-            image_mask = batch_r_idx == self.image_relation_index  
-            text_mask  = batch_r_idx == self.text_relation_index       
+        # ── Modality contrastive loss (optional) ──────────────────────────
+        if self.use_contrastive and self.v_feat is not None and self.t_feat is not None:
+            image_mask = batch_r_idx == self.image_relation_index
+            text_mask  = batch_r_idx == self.text_relation_index
             if image_mask.any() and text_mask.any():
-                image_item_heads = batch_h_idx[image_mask]
-                text_item_heads  = batch_h_idx[text_mask]
+                img_heads = batch_h_idx[image_mask]
+                txt_heads = batch_h_idx[text_mask]
+                img_rows  = batch_t_idx[image_mask] - self.image_offset   # row in v_feat
+                txt_rows  = batch_t_idx[text_mask]  - self.text_offset    # row in t_feat
 
-                heads = set(image_item_heads.tolist()) & set(text_item_heads.tolist())
+                common = set(img_heads.tolist()) & set(txt_heads.tolist())
+                if len(common) >= 2:
+                    common_t = torch.tensor(list(common), device=self.device)
 
-                if len(heads) >= 2:
+                    img_sel = torch.isin(img_heads, common_t)
+                    txt_sel = torch.isin(txt_heads, common_t)
 
-                    common_heads_tensor = torch.tensor(list(heads), device=self.device)
+                    # sort by head id so image[i] and text[i] refer to the same item
+                    img_order = torch.argsort(img_heads[img_sel])
+                    txt_order = torch.argsort(txt_heads[txt_sel])
 
-                    final_image_mask = image_mask & torch.isin(batch_h_idx, common_heads_tensor)
-                    final_text_mask  = text_mask & torch.isin(batch_h_idx, common_heads_tensor)
+                    v_rows = img_rows[img_sel][img_order]
+                    t_rows = txt_rows[txt_sel][txt_order]
 
-                    img_heads_filtered = batch_h_idx[final_image_mask]
-                    txt_heads_filtered = batch_h_idx[final_text_mask]
-
-                    v_sort_idx = torch.argsort(img_heads_filtered)
-                    t_sort_idx = torch.argsort(txt_heads_filtered)
-
-                    z_v = F.normalize(t_emb[final_image_mask][v_sort_idx], dim=-1)
-                    z_t = F.normalize(t_emb[final_text_mask][t_sort_idx], dim=-1)
+                    z_v = F.normalize(self.image_fc(self.v_feat[v_rows]), dim=-1)
+                    z_t = F.normalize(self.text_fc(self.t_feat[t_rows]), dim=-1)
 
                     logits = torch.matmul(z_v, z_t.T) / 0.07
                     labels = torch.arange(len(z_v), device=self.device)
 
                     loss_cl = (F.cross_entropy(logits, labels) +
-                            F.cross_entropy(logits.T, labels)) / 2.0
-                    final_loss = loss_kg + loss_cl
-
-                    return final_loss
+                               F.cross_entropy(logits.T, labels)) / 2.0
+                    return loss_kg + 0.2 * loss_cl
         return loss_kg
 
 
@@ -614,10 +586,12 @@ class MKGAT(GeneralRecommender):
             range_min = self.n_users
             range_max = self.max_structural_entity_index
 
-        corrupted = str(random.randint(range_min, range_max))
         valid_tails = self.valid_tails[(triplet.head, triplet.relation)]
-        while corrupted in valid_tails:
+        corrupted = str(random.randint(range_min, range_max))
+        attempts = 0
+        while corrupted in valid_tails and attempts < 100:
             corrupted = str(random.randint(range_min, range_max))
+            attempts += 1
         return corrupted
     
 
@@ -658,9 +632,12 @@ class MKGAT(GeneralRecommender):
         pi_base_emb = self.entity_embedding(pos_item)
         ni_base_emb = self.entity_embedding(neg_item)
 
-        reg_loss = self.reg_weight * (u_base_emb.pow(2).sum() + pi_base_emb.pow(2).sum() + ni_base_emb.pow(2).sum())
+        batch_size = u_base_emb.shape[0]
+        reg_loss = self.reg_weight * (u_base_emb.pow(2).sum()
+                                      + pi_base_emb.pow(2).sum()
+                                      + ni_base_emb.pow(2).sum()) / batch_size
 
-        return loss_bpr + reg_loss 
+        return loss_bpr + reg_loss
 
 
        
@@ -689,7 +666,7 @@ class MKGAT(GeneralRecommender):
         return scores
     
     
-    def _scatter_softmax(self, src, index, num_nodes): #attn_logits, h_idx, num_nodes=head_emb.shape[0])
+    def _scatter_softmax(self, src, index, num_nodes): 
         """
         Compute a numerically stable softmax.
         Args:

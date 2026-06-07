@@ -84,7 +84,8 @@ class LightGCN(GeneralRecommender):
                              [1]*inter_M.nnz))
         data_dict.update(dict(zip(zip(inter_M_t.row+self.n_users, inter_M_t.col),
                                   [1]*inter_M_t.nnz)))
-        A._update(data_dict)
+        for (r, c), v in data_dict.items():
+            A[r, c] = v
         # norm adj matrix
         sumArr = (A > 0).sum(axis=1)
         # add epsilon to avoid Devide by zero Warning

@@ -1,0 +1,40 @@
+{
+  "os": "Windows-10-10.0.26200-SP0",
+  "python": "CPython 3.11.15",
+  "startedAt": "2026-06-06T22:18:09.692895Z",
+  "program": "C:\\Users\\bevia\\Documents\\GitHub\\SIIA\\MMRec-master\\src\\main.py",
+  "codePath": "MMRec-master\\src\\main.py",
+  "codePathLocal": "main.py",
+  "git": {
+    "remote": "https://github.com/Beviale/SIIA.git",
+    "commit": "bb13cf649d74a31c04d3b8972f3858e00f2e7ef2"
+  },
+  "email": "beviale@outlook.it",
+  "root": "C:\\Users\\bevia\\Documents\\GitHub\\SIIA\\MMRec-master\\src",
+  "host": "UniversitàHP",
+  "executable": "C:\\Users\\bevia\\miniconda3\\envs\\siia\\python.exe",
+  "cpu_count": 14,
+  "cpu_count_logical": 20,
+  "gpu": "NVIDIA GeForce RTX 4050 Laptop GPU",
+  "gpu_count": 1,
+  "disk": {
+    "/": {
+      "total": "510794919936",
+      "used": "344882417664"
+    }
+  },
+  "memory": {
+    "total": "16802582528"
+  },
+  "gpu_nvidia": [
+    {
+      "name": "NVIDIA GeForce RTX 4050 Laptop GPU",
+      "memoryTotal": "6439305216",
+      "cudaCores": 2560,
+      "architecture": "Ada",
+      "uuid": "GPU-bb92f44f-b3b0-8176-c1be-1dea309d2a79"
+    }
+  ],
+  "cudaVersion": "13.1",
+  "writerId": "wwrxgv35rht09lnc6xocjnrbhb3qyt3n"
+}

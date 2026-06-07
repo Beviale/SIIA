@@ -1,0 +1,67 @@
+_wandb:
+    value:
+        cli_version: 0.27.0
+        e:
+            bi7l3y5rv4co8nt6qohcqlewi1thxvdv:
+                codePath: MMRec-master\src\main.py
+                codePathLocal: main.py
+                cpu_count: 14
+                cpu_count_logical: 20
+                cudaVersion: "13.1"
+                disk:
+                    /:
+                        total: "510794919936"
+                        used: "341331578880"
+                email: beviale@outlook.it
+                executable: C:\Users\bevia\miniconda3\envs\siia\python.exe
+                git:
+                    commit: bb13cf649d74a31c04d3b8972f3858e00f2e7ef2
+                    remote: https://github.com/Beviale/SIIA.git
+                gpu: NVIDIA GeForce RTX 4050 Laptop GPU
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ada
+                      cudaCores: 2560
+                      memoryTotal: "6439305216"
+                      name: NVIDIA GeForce RTX 4050 Laptop GPU
+                      uuid: GPU-bb92f44f-b3b0-8176-c1be-1dea309d2a79
+                host: UniversitàHP
+                memory:
+                    total: "16802582528"
+                os: Windows-10-10.0.26200-SP0
+                program: C:\Users\bevia\Documents\GitHub\SIIA\MMRec-master\src\main.py
+                python: CPython 3.11.15
+                root: C:\Users\bevia\Documents\GitHub\SIIA\MMRec-master\src
+                startedAt: "2026-06-04T01:01:07.020573Z"
+                writerId: bi7l3y5rv4co8nt6qohcqlewi1thxvdv
+        m: []
+        python_version: 3.11.15
+        t:
+            "1":
+                - 1
+                - 41
+            "2":
+                - 1
+                - 41
+            "3":
+                - 2
+                - 13
+                - 16
+            "4": 3.11.15
+            "5": 0.27.0
+            "8":
+                - 3
+            "12": 0.27.0
+            "13": windows-amd64
+dropout_ratio:
+    value: 0.25
+learning_rate:
+    value: 0.0005
+modality_dropout_ratio:
+    value: 0.2
+n_layers:
+    value: 1
+reg_weight:
+    value: 0.0001
+seed:
+    value: 999
