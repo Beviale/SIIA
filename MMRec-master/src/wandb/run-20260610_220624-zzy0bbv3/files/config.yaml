@@ -1,0 +1,65 @@
+_wandb:
+    value:
+        cli_version: 0.27.0
+        e:
+            lc4blvrknm03duph9gwaqmf26klm3mwj:
+                codePath: MMRec-master\src\main.py
+                codePathLocal: main.py
+                cpu_count: 14
+                cpu_count_logical: 20
+                cudaVersion: "13.1"
+                disk:
+                    /:
+                        total: "510794919936"
+                        used: "352920993792"
+                email: beviale@outlook.it
+                executable: C:\Users\bevia\miniconda3\envs\siia\python.exe
+                git:
+                    commit: 4cf0115c81ffd146e803836d660efe903ad4d117
+                    remote: https://github.com/Beviale/SIIA.git
+                gpu: NVIDIA GeForce RTX 4050 Laptop GPU
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ada
+                      cudaCores: 2560
+                      memoryTotal: "6439305216"
+                      name: NVIDIA GeForce RTX 4050 Laptop GPU
+                      uuid: GPU-bb92f44f-b3b0-8176-c1be-1dea309d2a79
+                host: UniversitàHP
+                memory:
+                    total: "16802582528"
+                os: Windows-10-10.0.26200-SP0
+                program: C:\Users\bevia\Documents\GitHub\SIIA\MMRec-master\src\main.py
+                python: CPython 3.11.15
+                root: C:\Users\bevia\Documents\GitHub\SIIA\MMRec-master\src
+                startedAt: "2026-06-10T20:06:24.795703Z"
+                writerId: lc4blvrknm03duph9gwaqmf26klm3mwj
+        m: []
+        python_version: 3.11.15
+        t:
+            "1":
+                - 1
+                - 41
+            "2":
+                - 1
+                - 41
+            "3":
+                - 2
+                - 13
+                - 16
+            "4": 3.11.15
+            "5": 0.27.0
+            "8":
+                - 3
+            "10":
+                - 20
+            "12": 0.27.0
+            "13": windows-amd64
+kg_loss_weight:
+    value: 1
+learning_rate:
+    value: 0.0005
+n_layers:
+    value: 2
+seed:
+    value: 999

@@ -1,0 +1,13 @@
+# Common Features
+USER_ID_FIELD: userID
+ITEM_ID_FIELD: itemID
+#RATING_FIELD: rating
+TIME_FIELD: timestamp
+
+filter_out_cod_start_users: True
+
+inter_file_name: 'amazon_book.inter'
+kg_triplets_file_name: 'triplets.txt'
+dataset_support_triplets: True
+
+field_separator: "\t"

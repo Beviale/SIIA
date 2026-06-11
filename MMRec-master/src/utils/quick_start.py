@@ -21,6 +21,9 @@ import wandb
 def quick_start(model, dataset, config_dict, save_model=True, mg=False):
     # merge config dict
     config = Config(model, dataset, config_dict, mg)
+    # Force wandb online logging regardless of any WANDB_MODE left in the shell
+    # (a stale WANDB_MODE=offline/disabled silently stops web logging).
+    os.environ['WANDB_MODE'] = 'online'
     init_logger(config)
     logger = getLogger()
     # print config infor
@@ -68,35 +71,48 @@ def quick_start(model, dataset, config_dict, save_model=True, mg=False):
             config[j] = k
         init_seed(config['seed'])
 
-        # start wandb
+        # build the wandb run name only — the run itself is created right before
+        # training (see below), so an aborted/crashed setup doesn't leave an empty
+        # "ghost" run online with no data.
         _contrastive = config['use_contrastive'] if config['use_contrastive'] is not None else False
         run_name = f"contrastive{_contrastive}_" + config['dataset'] + "_"
         run_name = run_name + "_".join([f"{j}{k}" for j, k in zip(config['hyper_parameters'], hyper_tuple)])
-        run = wandb.init(
-            project=config['model'],
-            name=run_name, 
-            config={k: config[k] for k in config['hyper_parameters']},
-        )
-        # end wandb
 
         logger.info('========={}/{}: Parameters:{}={}======='.format(
             idx+1, total_loops, config['hyper_parameters'], hyper_tuple))
 
         # set random state of dataloader
         train_data.pretrain_setup()
-        # model loading and initialization
-        model = get_model(config['model'])(config, train_data).to(config['device'])
+
+        if config['model_enriched_triples_format'] and config['dataset_support_triplets']:
+            train_triplets = train_data.kg_triplets()
+            model = get_model(config['model'])(config, train_data, train_triplets).to(config['device'])
+        else:
+            model = get_model(config['model'])(config, train_data).to(config['device'])
+
         logger.info(model)
 
         # trainer loading and initialization
-        if config['model'] == "MKGAT":
+        if config['model'] == "KGAT":
+            trainer = MKGATTrainer(config, model, run_name, mg, train_triplets)
+        elif config["model"] == "MKGAT":
             trainer = MKGATTrainer(config, model, run_name, mg)
         else:
             trainer = get_trainer()(config, model, mg)
-        # debug
-        # model training
-        best_valid_score, best_valid_result, best_test_upon_valid = trainer.fit(train_data, valid_data=valid_data, test_data=test_data, saved=save_model)
-        #########
+        # model training — create the wandb run only now, when we're about to log.
+        # try/finally guarantees the run is closed (and synced) even if fit() raises.
+        run = wandb.init(
+            project=config['model'],
+            name=run_name,
+            config={k: config[k] for k in config['hyper_parameters']},
+            mode='online',
+            reinit=True,
+        )
+        try:
+            best_valid_score, best_valid_result, best_test_upon_valid = trainer.fit(
+                train_data, valid_data=valid_data, test_data=test_data, saved=save_model)
+        finally:
+            run.finish()   # close the run so it syncs and the next init starts clean
         hyper_ret.append((hyper_tuple, best_valid_result, best_test_upon_valid))
 
         # save best test
@@ -110,9 +126,6 @@ def quick_start(model, dataset, config_dict, save_model=True, mg=False):
         logger.info('████Current BEST████:\nParameters: {}={},\n'
                     'Valid: {},\nTest: {}\n\n\n'.format(config['hyper_parameters'],
             hyper_ret[best_test_idx][0], dict2str(hyper_ret[best_test_idx][1]), dict2str(hyper_ret[best_test_idx][2])))
-    
-
-        run.finish()
 
     # log info
     logger.info('\n============All Over=====================')

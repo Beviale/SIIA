@@ -3,6 +3,7 @@ import os
 import json
 import ast
 import csv
+from collections import defaultdict
 from tqdm import tqdm
 import pandas as pd
 
@@ -156,7 +157,7 @@ def construct_triplets_json(dataset_name, interact_file_name, metadata_id_field,
                 line = "\t".join(map(str, triple))
                 f.write(line + "\n")
             
-construct_triplets_json("baby", "baby.inter", "asin", ["brand", "related/also_bought"])
+# construct_triplets_json("baby", "baby.inter", "asin", ["brand", "related/also_bought"])
 
 
 
@@ -264,6 +265,156 @@ def construct_triplets(dataset_name, interact_file_name, additional_triplets_fil
                 f.write(line + "\n")
             
 #construct_triplets("movielens", "movielens_1m.inter", "ml25m_dbpedia_1hop.tsv")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Cleaned KG builder: predicate whitelist + leaf-entity removal + saved mappings
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Semantic predicates worth keeping (short name, lowercase). dbo:/dbp: variants
+# of the same concept (e.g. ontology/starring vs property/starring) collapse to
+# the same name → the relation is unified instead of duplicated.
+PREDICATE_WHITELIST = {
+    'subject',        # dct:subject  → Wikipedia categories (films of 1995, ...)
+    'starring',       # actors
+    'director',
+    'writer',
+    'producer',
+    'musiccomposer',
+    'composer',
+    'cinematography',
+    'editing',
+    'distributor',
+    'genre',
+    'country',
+    'language',
+    'basedon',
+    'series',
+    'author',
+}
+
+
+def _norm_predicate(uri):
+    """URI → short lowercase name (last path/# segment). Unifies dbo/dbp variants."""
+    return str(uri).rsplit('/', 1)[-1].split('#')[-1].lower()
+
+
+def construct_triplets_clean(dataset_name, interact_file_name, additional_triplets_filename,
+                             predicate_whitelist=PREDICATE_WHITELIST, min_entity_degree=2):
+    """
+    Build a *cleaned* KG triplets.txt:
+      - keep only whitelisted (semantic) predicates, unifying dbo/dbp variants;
+      - drop leaf entities (KG entities linked to < min_entity_degree items),
+        since they connect nothing and only add noise;
+      - reassign contiguous indices and SAVE the relation/entity mappings.
+
+    Encoding: user node = userID; item node = itemID + n_user; KG entity nodes
+    start right after the items. Relation 0 = user-item interaction.
+    """
+    dataset_dir = f"../data/{dataset_name}"
+    output_path        = os.path.join(dataset_dir, "triplets.txt")
+    i_id_mapping       = os.path.join(dataset_dir, "i_id_mapping.csv")
+    interact_path      = os.path.join(dataset_dir, interact_file_name)
+    additional_path    = os.path.join(dataset_dir, additional_triplets_filename)
+    relation_map_path  = os.path.join(dataset_dir, "relation_mapping.tsv")
+    entity_map_path    = os.path.join(dataset_dir, "entity_mapping.tsv")
+
+    n_user = pd.read_csv(interact_path, sep='\t', usecols=['userID'])['userID'].nunique()
+
+    # item URI -> node index
+    items_id2index = {}
+    with open(i_id_mapping, 'r', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        next(reader)
+        for parts in reader:
+            if len(parts) >= 2:
+                items_id2index[parts[0]] = int(parts[1]) + n_user
+    n_items = len(items_id2index)
+
+    # ── 1) interaction triplets (relation 0) ──────────────────────────────────
+    interaction_triplets = []
+    with open(interact_path, 'r', encoding='utf-8') as f:
+        f.readline()
+        for line in f:
+            parts = line.split()
+            if len(parts) >= 2:
+                interaction_triplets.append([int(parts[0]), 0, int(parts[1]) + n_user])
+
+    # ── 2) scan DBpedia, keep only whitelisted semantic triples ───────────────
+    candidates = []                       # (subject_index, pred_name, object_uri)
+    obj_items = defaultdict(set)          # object_uri -> set of item indices
+    for chunk in tqdm(pd.read_csv(additional_path, sep='\t', chunksize=200000),
+                      desc="Scanning DBpedia"):
+        for s, p, o in zip(chunk['subject'], chunk['predicate'], chunk['object']):
+            if s not in items_id2index:
+                continue
+            o = str(o)
+            if not o.startswith('http'):
+                continue
+            pn = _norm_predicate(p)
+            if pn not in predicate_whitelist:
+                continue
+            si = items_id2index[s]
+            candidates.append((si, pn, o))
+            obj_items[o].add(si)
+
+    # ── 3) drop leaf entities (item-objects are always kept) ──────────────────
+    def keep(o):
+        return (o in items_id2index) or (len(obj_items[o]) >= min_entity_degree)
+    kept = [(si, pn, o) for (si, pn, o) in candidates if keep(o)]
+
+    # ── 4) assign contiguous indices ──────────────────────────────────────────
+    relation_id2index = {}
+    next_rel = 1                          # 0 reserved for interaction
+    entity_id2index = dict(items_id2index)
+    next_ent = n_user + n_items
+    semantic_triplets = []
+    for si, pn, o in kept:
+        if pn not in relation_id2index:
+            relation_id2index[pn] = next_rel
+            next_rel += 1
+        ri = relation_id2index[pn]
+        if o in entity_id2index:
+            oi = entity_id2index[o]
+        else:
+            oi = next_ent
+            entity_id2index[o] = oi
+            next_ent += 1
+        semantic_triplets.append([si, ri, oi])
+
+    # ── 5) write triplets.txt (forward only; inverses added at load time) ─────
+    with open(output_path, 'w', encoding='utf-8') as f:
+        for tr in interaction_triplets:
+            f.write("\t".join(map(str, tr)) + "\n")
+        for tr in semantic_triplets:
+            f.write("\t".join(map(str, tr)) + "\n")
+
+    # ── 6) save mappings ──────────────────────────────────────────────────────
+    with open(relation_map_path, 'w', encoding='utf-8') as f:
+        f.write("index\tname\n0\tinteraction\n")
+        for name, idx in sorted(relation_id2index.items(), key=lambda x: x[1]):
+            f.write(f"{idx}\t{name}\n")
+    with open(entity_map_path, 'w', encoding='utf-8') as f:
+        f.write("index\turi\n")
+        for uri, idx in entity_id2index.items():
+            if idx >= n_user + n_items:          # only KG entities, not items
+                f.write(f"{idx}\t{uri}\n")
+
+    # ── report ────────────────────────────────────────────────────────────────
+    n_kg_entities = next_ent - (n_user + n_items)
+    print("\n========== CLEANED KG ==========")
+    print(f"users:            {n_user}")
+    print(f"items:            {n_items}")
+    print(f"KG entities kept:  {n_kg_entities}")
+    print(f"relations kept:    {len(relation_id2index)}  -> {sorted(relation_id2index, key=relation_id2index.get)}")
+    print(f"interaction edges: {len(interaction_triplets)}")
+    print(f"semantic edges:    {len(semantic_triplets)}  (candidates before leaf-drop: {len(candidates)})")
+    print(f"total edges:       {len(interaction_triplets) + len(semantic_triplets)}")
+    print(f"saved: {output_path}, {relation_map_path}, {entity_map_path}")
+
+
+construct_triplets_clean("movielens", "movielens_1m.inter", "ml25m_dbpedia_1hop.tsv",
+                         min_entity_degree=2)
 
 
 

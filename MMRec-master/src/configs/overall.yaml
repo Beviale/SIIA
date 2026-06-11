@@ -14,7 +14,7 @@ save_recommended_topk: True
 recommend_topk: 'recommend_topk/'
 
 embedding_size: 64
-weight_decay: 0.0
+weight_decay: 0
 req_training: True
 #embedding_size: 3780
 
@@ -24,7 +24,7 @@ stopping_step: 20
 train_batch_size: 2048
 learner: adam
 learning_rate: 0.001
-learning_rate_scheduler:  [0.5, 15]
+learning_rate_scheduler:  [1, 15]
 eval_step: 1
 
 training_neg_sample_num: 1

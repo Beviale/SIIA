@@ -8,10 +8,12 @@ text_feature_file:   text_feat.npy
 # ── Hyperparameters ─────────────────────────────────────────────────────────────
 leaky_relu_slope: 0.01
 reg_weight: 0.1 # provati 0.1, 2.0, 0.5, 
-learning_rate: [0.001, 0.0005]
-modality_dropout_ratio: 0.2
+learning_rate: [0.0005, 0.001]
+modality_dropout_ratio: 0.1
 n_layers: [2,1,3]
-dropout_ratio: 0.5
+dropout_ratio: 0.2
+message_dropout_ratio: 0.1
+kg_batch_size: 2048        
 hyper_parameters: ["learning_rate", "n_layers", "kg_loss_weight"]
 
 # ── Learning ─────────────────────────────────────────────────────────────
@@ -20,6 +22,5 @@ clip_grad_norm: 1.0
 
 # ── Representation format ─────────────────────────────────────────────────────────────
 model_enriched_triples_format: True # We have triples covering the user-item, item-item and the item-attributes relations
-use_contrastive: True   # modality image-text contrastive (InfoNCE) loss
-use_layernorm: False     # ablation: False = no LayerNorm in shared_structural_fc
+use_contrastive: False   # modality image-text contrastive (InfoNCE) loss
 kg_loss_weight: [1, 0.5]   # weight of condthe KG (TransE) loss; <1 reduces KG/BPR tension

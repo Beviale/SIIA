@@ -1,0 +1,48 @@
+_wandb:
+    value:
+        cli_version: 0.27.0
+        e:
+            2kzw271dawsbt27mc6zq70wk1708mn3q:
+                codePath: MMRec-master\src\main.py
+                codePathLocal: main.py
+                email: beviale@outlook.it
+                executable: C:\Users\bevia\miniconda3\envs\siia\python.exe
+                git:
+                    commit: 4cf0115c81ffd146e803836d660efe903ad4d117
+                    remote: https://github.com/Beviale/SIIA.git
+                host: UniversitàHP
+                os: Windows-10-10.0.26200-SP0
+                program: C:\Users\bevia\Documents\GitHub\SIIA\MMRec-master\src\main.py
+                python: CPython 3.11.15
+                root: C:\Users\bevia\Documents\GitHub\SIIA\MMRec-master\src
+                startedAt: "2026-06-10T19:31:43.225858Z"
+                writerId: 2kzw271dawsbt27mc6zq70wk1708mn3q
+        m: []
+        python_version: 3.11.15
+        t:
+            "1":
+                - 1
+                - 41
+            "2":
+                - 1
+                - 41
+            "3":
+                - 2
+                - 13
+                - 16
+            "4": 3.11.15
+            "5": 0.27.0
+            "8":
+                - 3
+            "10":
+                - 20
+            "12": 0.27.0
+            "13": windows-amd64
+kg_loss_weight:
+    value: 1
+learning_rate:
+    value: 0.0005
+n_layers:
+    value: 2
+seed:
+    value: 999

@@ -1,0 +1,17 @@
+{
+  "os": "Windows-10-10.0.26200-SP0",
+  "python": "CPython 3.11.15",
+  "startedAt": "2026-06-09T21:31:41.073295Z",
+  "program": "C:\\Users\\bevia\\Documents\\GitHub\\SIIA\\MMRec-master\\src\\main.py",
+  "codePath": "MMRec-master\\src\\main.py",
+  "codePathLocal": "main.py",
+  "git": {
+    "remote": "https://github.com/Beviale/SIIA.git",
+    "commit": "4cf0115c81ffd146e803836d660efe903ad4d117"
+  },
+  "email": "beviale@outlook.it",
+  "root": "C:\\Users\\bevia\\Documents\\GitHub\\SIIA\\MMRec-master\\src",
+  "host": "UniversitàHP",
+  "executable": "C:\\Users\\bevia\\miniconda3\\envs\\siia\\python.exe",
+  "writerId": "ikml72tltuamc892cx0fd9rcbgyoo31a"
+}

@@ -31,11 +31,13 @@ class Triplets:
     def get_all_unique_tails(self) -> Set[str]:
         return set(self.get_all_tails())
     
-    def get_unique_entities(self) -> Set[str]:
+    def get_unique_item_and_entities(self) -> Set[str]:
         entities = set()
         for t in self.data:
             if t.relation == "0":
                 entities.add(t.tail)
+            elif t.relation == "1":
+                entities.add(t.head)
             else:
                 entities.add(t.head)
                 entities.add(t.tail)
@@ -51,7 +53,7 @@ class Triplets:
     def get_all_head_entities(self) -> Set[str]:
         heads = set()
         for t in self.data:
-            if t.relation != '0':
+            if t.relation != '0' and t.relation != "1":
                 heads.add(t.head)
         return heads
 
@@ -72,14 +74,14 @@ class Triplets:
     def get_user_triplets(self) -> List[Triplet]:
         triplets_filtered = []
         for t in self.data:
-            if t.relation == "0":
+            if t.relation == "0" or t.relation == "1":
                 triplets_filtered.append(t)
         return triplets_filtered
     
     def get_entity_triplets(self) -> List[Triplet]:
         triplets_filtered = []
         for t in self.data:
-            if t.relation != "0":
+            if t.relation != "0" and t.relation != "1":
                 triplets_filtered.append(t)
         return triplets_filtered
 
