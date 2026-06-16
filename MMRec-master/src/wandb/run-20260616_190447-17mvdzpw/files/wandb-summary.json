@@ -1,0 +1,1 @@
+{"_runtime":1673,"KG Batch Loss":0.15948185324668884,"Map@20":0.0069,"_wandb":{"runtime":1673},"_step":17042,"_timestamp":1.7816311570085897e+09,"Recommendation Batch Loss":0.3309405744075775,"Recommendation Epoch Loss":0.32647053434931,"Recall@20":0.0343,"Ndcg@20":0.0129}

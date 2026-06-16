@@ -1,27 +1,12 @@
 # coding: utf-8
 r"""
-KGAT — Knowledge Graph Attention Network (structural only, no multimodal)
+KGAT — Knowledge Graph Attention Network (no multimodal)
 #########################################################################
 Paper:
     Wang et al. "KGAT: Knowledge Graph Attention Network for Recommendation"
     KDD 2019 — https://arxiv.org/abs/1905.07854
-
-Faithful (lunablack-style) MMRec port, without multimodal features:
-  - Joint user+entity embedding table (CKG).
-  - Decreasing per-layer dims via conv_dim_list (64 -> 32 -> 16).
-  - bi-interaction aggregation through sparse A_in (torch.sparse.mm).
-  - Layer-0 ego kept RAW, deeper layers L2-normalised, all concatenated.
-  - A_in initialised from the summed normalised Laplacians, then recomputed
-    once per epoch via TransR attention (update_attention).
-
-Designed to run with MKGATTrainer (common/trainer.py), which calls:
-    model(interaction, mode='train_cf')            → calc_cf_loss
-    model.calc_kg_loss(h, r, pos_t, neg_t)         → KG TransR loss
-    model.update_attention(h, t, r, relations)     → recompute A_in
-    model.full_sort_predict(interaction)           → score matrix
 """
 
-import random
 from collections import defaultdict
 
 import numpy as np
@@ -32,21 +17,20 @@ import torch.nn.functional as F
 
 from common.abstract_recommender import GeneralRecommender
 from common.loss import BPRLoss
-from utils.triplet import Triplet, Triplets
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# _____________________________________________________________________________
 # Graph propagation layer (bi-interaction)
-# ─────────────────────────────────────────────────────────────────────────────
+# _____________________________________________________________________________
 
 class Aggregator(nn.Module):
     """
-    One KGAT bi-interaction propagation layer (paper §3.2):
+    One KGAT bi-interaction propagation layer:
 
         side = A_in @ ego
         out  = LeakyReLU(W1(ego + side)) + LeakyReLU(W2(ego * side))
 
-    Aggregation is done with a sparse matrix product (torch.sparse.mm).
+    Aggregation is done with a sparse matrix product.
     Dropout is applied to the layer output.
     """
 
@@ -67,17 +51,15 @@ class Aggregator(nn.Module):
         return self.message_dropout(out)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
+# _____________________________________________________________________________
 # KGAT model
-# ─────────────────────────────────────────────────────────────────────────────
+# _____________________________________________________________________________
 
 class KGAT(GeneralRecommender):
-    r"""Knowledge Graph Attention Network — structural variant (no multimodal)."""
-
-    def __init__(self, config, dataset, triplets):
+    def __init__(self, config, dataset, triples):
         super().__init__(config, dataset)
 
-        # ── ìHyperparameters ──────────────────────────────────────────────────
+        # __ Hyperparameters __________________________________________________
         self.embed_dim      = config['embedding_size']
         self.relation_dim   = config['relation_dim']
         self.mess_dropout    = config['mess_dropout']            
@@ -85,9 +67,9 @@ class KGAT(GeneralRecommender):
         self.kg_loss_weight  = (config['kg_loss_weight']
                                 if config['kg_loss_weight'] is not None else 1.0)
 
-        self.triplets = triplets
+        self.triples = triples
 
-        # Per-layer dims (decreasing). '[32, 16]' with embed 64 → 64,32,16.
+        # Per-layer dims (decreasing). 
         if config['conv_dim_list'] is not None:
             self.conv_dim_list = [self.embed_dim] + eval(config['conv_dim_list'])
         else:
@@ -98,19 +80,19 @@ class KGAT(GeneralRecommender):
         self.A_in.data = self._create_adjacency_matrix()
         self.mf_loss = BPRLoss()
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
     # Initialisation
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
 
     def _init_model(self):
         """Allocate all parameters and the propagation index structures."""
         all_node_ids = (
-            [int(t.head) for t in self.triplets.data]
-            + [int(t.tail) for t in self.triplets.data]
+            [int(t.head) for t in self.triples.data]
+            + [int(t.tail) for t in self.triples.data]
         )
         self.total_n_nodes = max(max(all_node_ids) + 1, self.n_users + self.n_items)
 
-        all_rels = self.triplets.get_unique_relations()
+        all_rels = self.triples.get_unique_relations()
         self.n_relations = len(all_rels)
 
         self.entity_user_embed = nn.Embedding(self.total_n_nodes, self.embed_dim)
@@ -126,7 +108,7 @@ class KGAT(GeneralRecommender):
         self.A_in.requires_grad = False
 
         self.relation_dict = defaultdict(list)
-        for tr in self.triplets.data:
+        for tr in self.triples.data:
             h, r, t = int(tr.head), int(tr.relation), int(tr.tail)
             self.relation_dict[r].append((h, t))
 
@@ -145,9 +127,9 @@ class KGAT(GeneralRecommender):
             for k in range(self.n_layers)
         ])
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
     # A_in construction (sum of per-relation normalised Laplacians)
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
 
     def _norm_lap(self, adj):
         """Symmetric normalisation: D^-1/2 A D^-1/2."""
@@ -166,8 +148,7 @@ class KGAT(GeneralRecommender):
     def _create_adjacency_matrix(self):
         """
         Build the initial A_in as the sum of per-relation, symmetrically
-        normalised adjacency matrices. Triples already include inverse
-        relations, so edges are used as-is.
+        normalised adjacency matrices. 
         """
         n = self.total_n_nodes
         A_sum = None
@@ -180,9 +161,9 @@ class KGAT(GeneralRecommender):
             A_sum = lap if A_sum is None else (A_sum + lap)
         return self._convert_coo2tensor(A_sum.tocoo())
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
     # CF propagation
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
 
     def calc_cf_embeddings(self):
         """Propagate over A_in; concat layer-0 (raw) + normalised deeper layers."""
@@ -193,18 +174,18 @@ class KGAT(GeneralRecommender):
             all_embed.append(F.normalize(ego_embed, p=2, dim=1))
         return torch.cat(all_embed, dim=1)                   # (n_nodes, sum dims)
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
     # Losses
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
 
     def _L2_loss_mean(self, x):
         return torch.mean(torch.sum(x.pow(2), dim=1, keepdim=False) / 2.0)
 
     def calc_cf_loss(self, interaction):
         """
-        interaction[0]: user ids        (local, == node id)
-        interaction[1]: pos item ids    (local, → node id + n_users)
-        interaction[2]: neg item ids    (local, → node id + n_users)
+        interaction[0]: user ids   
+        interaction[1]: pos item ids  
+        interaction[2]: neg item ids
         """
         user_ids     = interaction[0]
         item_pos_ids = interaction[1] + self.n_users
@@ -223,6 +204,7 @@ class KGAT(GeneralRecommender):
                    + self._L2_loss_mean(item_pos_embed)
                    + self._L2_loss_mean(item_neg_embed))
         return cf_loss + self.reg_weight * l2_loss
+
 
     def compute_kg_loss(self, h, r, pos_t, neg_t):
         """TransR pairwise ranking loss on a batch of triples."""
@@ -247,9 +229,9 @@ class KGAT(GeneralRecommender):
                    + self._L2_loss_mean(r_mul_neg_t))
         return kg_loss + self.reg_weight * l2_loss
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
     # Attention update (once per epoch)
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
 
     def _update_attention_batch(self, h_list, t_list, r_idx):
         r_embed = self.relation_embed.weight[r_idx]          
@@ -282,9 +264,9 @@ class KGAT(GeneralRecommender):
         A_in = torch.sparse.softmax(A_in.cpu(), dim=1)
         self.A_in.data = A_in.to(device)
 
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
     # Inference
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
 
     def full_sort_predict(self, interaction):
         """Return (batch_users, n_items) score matrix."""
@@ -296,9 +278,9 @@ class KGAT(GeneralRecommender):
     def calc_score(self, interaction):
         return self.full_sort_predict(interaction)
 
-    # ─────────────────────────────────────────────────────────────────────────
-    # Forward dispatch (used by MKGATTrainer)
-    # ─────────────────────────────────────────────────────────────────────────
+    # _________________________________________________________________________
+    # Forward dispatch (used by KGATTrainer)
+    # _________________________________________________________________________
 
     def forward(self, *input, mode):
         if mode == 'train_cf':

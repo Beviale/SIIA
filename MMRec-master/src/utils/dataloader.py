@@ -11,7 +11,7 @@ import os
 import numpy as np
 from logging import getLogger
 from scipy.sparse import coo_matrix
-from utils.triplet import Triplet, Triplets  
+from utils.triplet import Triplet, Triples  
 
 class AbstractDataLoader(object):
     """:class:`AbstractDataLoader` is an abstract object which would return a batch of data which is loaded by
@@ -153,11 +153,25 @@ class TrainDataLoader(AbstractDataLoader):
         # reorder dataset as default (chronological order)
         #self.dataset.sort_by_chronological()
 
-    def kg_triplets(self):
-        triplets = Triplets()
-        if self.dataset.config['dataset_support_triplets']:
-            triplets_file_name = self.dataset.config['kg_triplets_file_name']
-            input_path = os.path.join(self.dataset.dataset_path, triplets_file_name)
+    def kg_triples(self):
+        """
+        Build the knowledge-graph triples for this dataloader.
+
+        All semantic triples are included as-is, whereas the collaborative-filtering
+        triples (user-item interactions, relation 0) are kept only when the corresponding
+        (user, item) pair belongs to this dataloader.
+
+        For every triplet, its inverse is also added: a triplet (head, relation, tail) yields
+        (tail, inverse_relation, head), making the graph bidirectional. The inverse of the
+        interaction relation (0) is relation 1; the inverse of any other relation is its index
+        shifted by the maximum relation index.
+
+        Note: multi-modal KG triplets are not included here.
+        """
+        triples = Triples()
+        if self.dataset.config['dataset_support_triples']:
+            triples_file_name = self.dataset.config['kg_triples_file_name']
+            input_path = os.path.join(self.dataset.dataset_path, triples_file_name)
             if os.path.exists(input_path):
                 inter_matr = self.inter_matrix()
                 pairs_user_item = set(zip(inter_matr.row, inter_matr.col))
@@ -187,34 +201,34 @@ class TrainDataLoader(AbstractDataLoader):
                                 max_relation_index = int(tr_relation)
                             if tr_relation == "0":
                                 if (int(tr_head), int(tr_tail) - n_users) in pairs_user_item:
-                                    triplets.add(
+                                    triples.add(
                                         head=tr_head, 
                                         relation=tr_relation, 
                                         tail=tr_tail
                                     ) 
                             else:
-                                 triplets.add(
+                                 triples.add(
                                             head=tr_head, 
                                             relation=str(int(tr_relation) + 1), 
                                             tail=tr_tail
                                         )  
-                triplets_inv = Triplets()
+                triples_inv = Triples()
                 start_relation_index_inv = max_relation_index 
-                for triplet in triplets.data:
+                for triplet in triples.data:
                     if triplet.relation == "0":
-                         triplets_inv.add(
+                         triples_inv.add(
                             head=triplet.tail,
                             relation="1",
                             tail=triplet.head,
                         )
                     else:
-                        triplets_inv.add(
+                        triples_inv.add(
                             head=triplet.tail,
                             relation=str(int(triplet.relation) + start_relation_index_inv),
                             tail=triplet.head,
                         )
-                triplets.extend(triplets_inv)
-        return triplets
+                triples.extend(triples_inv)
+        return triples
         
     
     def inter_matrix(self, form='coo', value_field=None):

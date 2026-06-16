@@ -9,9 +9,9 @@ class Triplet:
     relation: str
     tail: str
 
-class Triplets:
-    def __init__(self, triplets_list: List[Triplet] = None):
-        self.data: List[Triplet] = triplets_list if triplets_list is not None else []
+class Triples:
+    def __init__(self, triples_list: List[Triplet] = None):
+        self.data: List[Triplet] = triples_list if triples_list is not None else []
 
     def add(self, head: str, relation: str, tail: str):
         self.data.append(Triplet(head, relation, tail))
@@ -71,32 +71,32 @@ class Triplets:
             entities.add(t.tail)
         return entities
     
-    def get_user_triplets(self) -> List[Triplet]:
-        triplets_filtered = []
+    def get_user_triples(self) -> List[Triplet]:
+        triples_filtered = []
         for t in self.data:
             if t.relation == "0" or t.relation == "1":
-                triplets_filtered.append(t)
-        return triplets_filtered
+                triples_filtered.append(t)
+        return triples_filtered
     
-    def get_entity_triplets(self) -> List[Triplet]:
-        triplets_filtered = []
+    def get_entity_triples(self) -> List[Triplet]:
+        triples_filtered = []
         for t in self.data:
             if t.relation != "0" and t.relation != "1":
-                triplets_filtered.append(t)
-        return triplets_filtered
+                triples_filtered.append(t)
+        return triples_filtered
 
 
     def get_unique_relations(self) -> Set[str]:
         return set(self.get_all_relations())
     
 
-    def extend(self, triplets):
-        if isinstance(triplets, Triplets):
-            self.data.extend(triplets.data)
-        elif isinstance(triplets, list):
-            self.data.extend(triplets)
+    def extend(self, triples):
+        if isinstance(triples, Triples):
+            self.data.extend(triples.data)
+        elif isinstance(triples, list):
+            self.data.extend(triples)
         else:
-            raise TypeError(f"Expected Triplets or List[Triplet], got {type(triplets)}")
+            raise TypeError(f"Expected Triples or List[Triplet], got {type(triples)}")
 
 
     def __len__(self):

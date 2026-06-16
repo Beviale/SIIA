@@ -1,0 +1,61 @@
+_wandb:
+    value:
+        cli_version: 0.27.0
+        e:
+            7w342ew758yuoebc7vc77o7kkj8eqy4y:
+                codePath: MMRec-master\src\main.py
+                codePathLocal: main.py
+                cpu_count: 14
+                cpu_count_logical: 20
+                cudaVersion: "13.1"
+                disk:
+                    /:
+                        total: "510794919936"
+                        used: "334844424192"
+                email: beviale@outlook.it
+                executable: C:\Users\bevia\miniconda3\envs\siia\python.exe
+                git:
+                    commit: bdc66b6f3af29546abe219e84cae764d6e4b6543
+                    remote: https://github.com/Beviale/SIIA.git
+                gpu: NVIDIA GeForce RTX 4050 Laptop GPU
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ada
+                      cudaCores: 2560
+                      memoryTotal: "6439305216"
+                      name: NVIDIA GeForce RTX 4050 Laptop GPU
+                      uuid: GPU-bb92f44f-b3b0-8176-c1be-1dea309d2a79
+                host: UniversitàHP
+                memory:
+                    total: "16802582528"
+                os: Windows-10-10.0.26200-SP0
+                program: C:\Users\bevia\Documents\GitHub\SIIA\MMRec-master\src\main.py
+                python: CPython 3.11.15
+                root: C:\Users\bevia\Documents\GitHub\SIIA\MMRec-master\src
+                startedAt: "2026-06-15T18:44:30.637915Z"
+                writerId: 7w342ew758yuoebc7vc77o7kkj8eqy4y
+        m: []
+        python_version: 3.11.15
+        t:
+            "1":
+                - 1
+                - 41
+            "2":
+                - 1
+                - 41
+            "3":
+                - 2
+                - 13
+                - 16
+            "4": 3.11.15
+            "5": 0.27.0
+            "8":
+                - 3
+            "10":
+                - 20
+            "12": 0.27.0
+            "13": windows-amd64
+learning_rate:
+    value: 0.0001
+seed:
+    value: 2019

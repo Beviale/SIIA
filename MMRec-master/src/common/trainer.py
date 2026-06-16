@@ -345,15 +345,18 @@ class Trainer(AbstractTrainer):
     
     
 
-class MKGATTrainer(Trainer):
-    def __init__(self, config, model, run_name, mg=False, triplets=None):
-        super(MKGATTrainer, self).__init__(config, model, mg)
-        self.run_name = run_name
+class KGATTrainer(Trainer):
+    """
+        Trainer to use for MKGAT and KGAT models.
+    """
+    def __init__(self, config, model, run_name, mg=False, triples=None):
+        super(KGATTrainer, self).__init__(config, model, mg)
+        self.run_name = run_name # for wandb and the checkpoint name
         self.config = config
-        self.kg_optimizer = self._build_optimizer()
+        self.kg_optimizer = self._build_optimizer() # Optimizer of the KG module
 
-        # ── KG batch data ─────────────────────────────────────────────────────
-        self.triplets = triplets if triplets is not None else getattr(model, 'triplets', None)
+        # __ KG batch data _____________________________________________________
+        self.triples = triples if triples is not None else getattr(model, 'triples', None) # train triples
         self.kg_batch_size = (config['kg_batch_size']
                               if config['kg_batch_size'] is not None
                               else config['train_batch_size'])
@@ -362,10 +365,9 @@ class MKGATTrainer(Trainer):
     def _setup_kg_data(self):
         """
         Index the KG triples as tensors and build the (head, relation) -> valid
-        tails map used for negative sampling. The triples already include the
-        inverse relations, so they are used as-is.
+        tails map used for negative sampling.
         """
-        data = self.triplets.data
+        data = self.triples.data
         self.kg_h = torch.LongTensor([int(t.head)     for t in data])
         self.kg_r = torch.LongTensor([int(t.relation) for t in data])
         self.kg_t = torch.LongTensor([int(t.tail)     for t in data])
@@ -514,25 +516,29 @@ class MKGATTrainer(Trainer):
         return self.best_valid_score, self.best_valid_result, self.best_test_upon_valid
 
     def _train_epoch(self, train_data, loss_func=None):
+        """
+            Train an epoch using alternative optimization.
+        """
         if not self.req_training:
             return 0.0, []
         self.model.train()
-        total_loss_rec = 0.0
-        loss_batches = []
+        cf_total_loss = 0.0
+        cf_loss_batches = []
 
-        for idx, interaction in enumerate(train_data):
+        # __ CF training _______________
+        for idx, interaction in enumerate(train_data): 
             cf_batch_loss = self.model(interaction, mode='train_cf')
             if np.isnan(cf_batch_loss.cpu().detach().numpy()):
-                self.logger.error("LOSS REC REC!")
-                return None, loss_batches
+                self.logger.error("CF LOSS REC!")
+                return None, cf_loss_batches
             cf_batch_loss.backward()
-            loss_batches.append(cf_batch_loss.item())
+            cf_loss_batches.append(cf_batch_loss.item())
             self.optimizer.step()
             self.optimizer.zero_grad()
-            total_loss_rec += cf_batch_loss.item()
+            cf_total_loss += cf_batch_loss.item()
             wandb.log({"Recommendation Batch Loss": cf_batch_loss.item()})
             
-        # ── KG training (one full pass of KG batches per epoch) ───────────────
+        # __ KG training _______________
         total_loss_kg = 0.0
         n_kg_batch = self.n_kg_train // self.kg_batch_size + 1
         for iter in range(1, n_kg_batch + 1):
@@ -541,10 +547,10 @@ class MKGATTrainer(Trainer):
             kg_batch_relation = kg_batch_relation.to(self.device)
             kg_batch_pos_tail = kg_batch_pos_tail.to(self.device)
             kg_batch_neg_tail = kg_batch_neg_tail.to(self.device)
-            kg_batch_loss = self.model.compute_kg_loss(kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail)
+            kg_batch_loss = self.model(kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail, mode='train_kg')
             if np.isnan(kg_batch_loss.cpu().detach().numpy()):
-                self.logger.error("LOSS KG NAN!")
-                return None, loss_batches
+                self.logger.error("KG LOSS NAN!")
+                return None, cf_loss_batches
             kg_batch_loss.backward()
             self.kg_optimizer.step()
             self.kg_optimizer.zero_grad()
@@ -552,13 +558,13 @@ class MKGATTrainer(Trainer):
             wandb.log({"KG Batch Loss": kg_batch_loss.item()})
 
         if self.config["model"] == "KGAT":
-            # ── Attention update (once per epoch, after KG training) ──────────────
+            # __ Attention update (once per epoch, after KG training) ______________
             self.model.update_attention(
                 self.kg_h.to(self.device),
                 self.kg_t.to(self.device),
                 self.kg_r.to(self.device),
                 self.kg_relations)
 
-        mean_rec_loss = total_loss_rec / len(train_data)
-        return mean_rec_loss, loss_batches
+        mean_rec_loss = cf_total_loss / len(train_data)
+        return mean_rec_loss, cf_loss_batches
 

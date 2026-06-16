@@ -15,7 +15,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from common.abstract_recommender import GeneralRecommender
 from common.loss import BPRLoss
-from utils.triplet import Triplet, Triplets
+from utils.triplet import Triplet, Triples
 from collections import defaultdict
 
 def _L2_loss_mean(x):
@@ -32,7 +32,7 @@ class MKGAT(GeneralRecommender):
     We implement the model following the original author with a pairwise training mode.
     """
  
-    def __init__(self, config, dataset, triplets):
+    def __init__(self, config, dataset, triples):
         super(MKGAT, self).__init__(config, dataset)
 
         # load configuration
@@ -47,25 +47,25 @@ class MKGAT(GeneralRecommender):
         self.message_dropout_ratio = config['message_dropout_ratio'] if config['message_dropout_ratio'] is not None else 0.1
         self.message_dropout = nn.Dropout(self.message_dropout_ratio)
 
-        self.triplets = triplets
+        self.triples = triples
 
         # Initialization
         self._init_model()
         self._initialize_idxs()
  
-    # ──────────────────────────────────────────────────────────────────────────
+    # __________________________________________________________________________
     # Initialization
-    # ──────────────────────────────────────────────────────────────────────────
+    # __________________________________________________________________________
  
     def _init_model(self):
         """
         Initialize all the weights and some instance attributes.
         """
-        self.max_structural_entity_index = max(int(entity) for entity in self.triplets.get_unique_entities_and_users()) # The maximum index of structural entities (excluding multi-modal entities, which are appended later)
-        self.max_structural_relation_index =  max(int(r) for r in self.triplets.get_unique_relations()) # The maximum index of relations except the multi-modal ones, which are appended later.
+        self.max_structural_entity_index = max(int(entity) for entity in self.triples.get_unique_entities_and_users()) # The maximum index of structural entities (excluding multi-modal entities, which are appended later)
+        self.max_structural_relation_index =  max(int(r) for r in self.triples.get_unique_relations()) # The maximum index of relations except the multi-modal ones, which are appended later.
 
-        self.n_structural_item_and_entities = len(self.triplets.get_unique_item_and_entities())
-        self.user_ids = [str(x) for x in sorted(int(i) for i in self.triplets.get_unique_users())]
+        self.n_structural_item_and_entities = len(self.triples.get_unique_item_and_entities())
+        self.user_ids = [str(x) for x in sorted(int(i) for i in self.triples.get_unique_users())]
         self.n_users = len(self.user_ids) 
         self.structural_node_embeddings = nn.Embedding(self.n_structural_item_and_entities +  self.n_users, self.embedding_dim)
         nn.init.xavier_uniform_(self.structural_node_embeddings.weight)
@@ -84,9 +84,9 @@ class MKGAT(GeneralRecommender):
             nn.Dropout(self.dropout_ratio),
         )
 
-        self.item_ids = [str(x) for x in sorted(int(i) for i in self.triplets.get_unique_items())]
+        self.item_ids = [str(x) for x in sorted(int(i) for i in self.triples.get_unique_items())]
         self.n_items = len(self.item_ids) 
-        new_triplets = self._build_modality_kg_triplets() 
+        new_triples = self._build_modality_kg_triples() 
         self.image_fc = nn.Sequential(
             nn.Linear(self.v_feat.shape[1], self.embedding_dim),
             nn.LeakyReLU(self.leaky_relu_slope),
@@ -97,7 +97,7 @@ class MKGAT(GeneralRecommender):
             nn.LeakyReLU(self.leaky_relu_slope),
             nn.Dropout(self.dropout_ratio),
         )
-        self.triplets.extend(new_triplets)
+        self.triples.extend(new_triples)
 
         self.mf_loss = BPRLoss()
 
@@ -109,23 +109,23 @@ class MKGAT(GeneralRecommender):
         nn.init.xavier_uniform_(self.W3.weight) 
 
     
-    def _build_modality_kg_triplets(self):
+    def _build_modality_kg_triples(self):
         """
-        Construct the triplets representing the associations between items 
+        Construct the triples representing the associations between items 
         and their multimodal data (images and texts).
 
         Returns:
-            triplets (Triplets): the resulting hasImage/hasText triplets (both directions)
+            triples (Triples): the resulting hasImage/hasText triples (both directions)
         """
         if self.v_feat is not None:
-            assert len(self.item_ids) == len(self.v_feat), "item_ids e v_feat disallineati: item mancanti nel train set?"
+            assert len(self.item_ids) == len(self.v_feat), "item_ids e v_feat not aligned"
         if self.t_feat is not None:
-            assert len(self.item_ids) == len(self.t_feat), "item_ids e t_feat disallineati: item mancanti nel train set?"
+            assert len(self.item_ids) == len(self.t_feat), "item_ids e t_feat not aligned"
 
         self.image_offset = self.max_structural_entity_index + 1
 
-        raw_triplets = []
-        item_ids = torch.tensor([int(x) for x in self.item_ids], dtype=torch.long, device=self.device)  # lista → tensore per il masking
+        raw_triples = []
+        item_ids = torch.tensor([int(x) for x in self.item_ids], dtype=torch.long, device=self.device) 
 
         # --- Relation: (item_i, hasImage, image_i) ---
         if self.v_feat is not None:
@@ -141,7 +141,7 @@ class MKGAT(GeneralRecommender):
                     torch.full_like(valid_items_v,  self.image_relation_index),
                     valid_images
                 ], dim=1)
-                raw_triplets.extend([[str(x) for x in triplet] for triplet in has_image.tolist()])
+                raw_triples.extend([[str(x) for x in triplet] for triplet in has_image.tolist()])
 
         # --- Relation: (item_i, hasText, text_i) ---
         self.text_offset  = self.image_offset + len(self.v_feat)
@@ -158,39 +158,33 @@ class MKGAT(GeneralRecommender):
                     torch.full_like(valid_items_t, self.text_relation_index), 
                     valid_texts
                 ], dim=1)
-                raw_triplets.extend([[str(x) for x in triplet] for triplet in has_text.tolist()])
+                raw_triples.extend([[str(x) for x in triplet] for triplet in has_text.tolist()])
 
-        triplets = Triplets()
-        for raw_triplet in raw_triplets:
+        triples = Triples()
+        for raw_triplet in raw_triples:
             if int(raw_triplet[1]) == self.image_relation_index:
-                triplets.add(raw_triplet[0], raw_triplet[1], raw_triplet[2])
-                triplets.add(raw_triplet[2], image_relation_index_opp, raw_triplet[0])
+                triples.add(raw_triplet[0], raw_triplet[1], raw_triplet[2])
+                triples.add(raw_triplet[2], image_relation_index_opp, raw_triplet[0])
             elif int(raw_triplet[1]) == self.text_relation_index:
-                triplets.add(raw_triplet[0], raw_triplet[1], raw_triplet[2])
-                triplets.add(raw_triplet[2], text_relation_index_opp, raw_triplet[0])
+                triples.add(raw_triplet[0], raw_triplet[1], raw_triplet[2])
+                triples.add(raw_triplet[2], text_relation_index_opp, raw_triplet[0])
 
-        return triplets
+        return triples
     
 
 
     def _initialize_idxs(self):
         """
         Set up the propagation graph index tensors.
-
-        Every graph node (user, item, KG entity, image, text) has a contiguous
-        integer id in [0, n_nodes), so head_emb is indexed directly by entity id
-        and no id->position mapping is needed. Bidirectional (KGAT-style)
-        propagation is built unconditionally: for each (h, r, t) a reverse edge
-        (t, r + n_base_relations, h) is added.
         """
         self.total_n_nodes = self.text_offset + len(self.t_feat)
 
         self.all_node_ids = torch.arange(self.total_n_nodes, dtype=torch.long, device=self.device)
 
-        triplets = self.triplets.data
-        h_indices = [int(t.head) for t in triplets]
-        r_indices = [int(t.relation) for t in triplets]
-        t_indices = [int(t.tail) for t in triplets]
+        triples = self.triples.data
+        h_indices = [int(t.head) for t in triples]
+        r_indices = [int(t.relation) for t in triples]
+        t_indices = [int(t.tail) for t in triples]
 
         self.triplet_h_idx = torch.tensor(h_indices, dtype=torch.long, device=self.device)
         self.triplet_r_idx = torch.tensor(r_indices, dtype=torch.long, device=self.device)
@@ -200,9 +194,9 @@ class MKGAT(GeneralRecommender):
         self.head_item_idx_tensor = torch.tensor([int(i) for i in self.item_ids], dtype=torch.long, device=self.device)
 
 
-    # ──────────────────────────────────────────────────────────────────────────
+    # __________________________________________________________________________
     # Utils
-    # ──────────────────────────────────────────────────────────────────────────
+    # __________________________________________________________________________
     def _get_node_embedding(self, entity):
         """
         Return the embedding vector for a given entity.
@@ -272,49 +266,39 @@ class MKGAT(GeneralRecommender):
         return self.relation_projected_embeddings[relation_ids_int]
 
       
-    # ──────────────────────────────────────────────────────────────────────────
+    # __________________________________________________________________________
     # MKG Attention Layer
-    # ──────────────────────────────────────────────────────────────────────────
+    # __________________________________________________________________________
  
     def _mkg_attention_layer(self, head_emb):
         """
-        Un layer di attention MKGAT (eq.1-4): e(h,r,t), attention π e aggregazione sono
-        calcolati TUTTI dagli embedding CORRENTI del layer (ricalcolati ad ogni layer).
-            e(h,r,t) = W1[h‖r‖t]                          (eq.2)
-            π̃ = LeakyReLU(W2·e(h,r,t)) ; π = softmax_h    (eq.3, eq.4)
-            e_agg(h) = Σ_{(r,t)∈N(h)} π(h,r,t)·e(h,r,t)   (eq.1)
-            new(h)   = W3[head ‖ e_agg]                    (eq.6)
+        Perform an attention layer propagation.
+        Args: 
+            head embeddings
+        Returns:
+            new updated head embeddings
         """
         h = head_emb[self.triplet_h_idx]
         r = self._get_relation_embedding_batch(self.triplet_r_idx)
         t = head_emb[self.triplet_t_idx]
 
-        e_hrt = self.W1(torch.cat([h, r, t], dim=-1))                                    # eq.2
-        attn_logits = F.leaky_relu(self.W2(e_hrt), negative_slope=self.leaky_relu_slope).squeeze(-1)  # eq.3
-        attn = self._scatter_softmax(attn_logits, self.triplet_h_idx, head_emb.shape[0])              # eq.4
+        e_hrt = self.W1(torch.cat([h, r, t], dim=-1))                                    
+        attn_logits = F.leaky_relu(self.W2(e_hrt), negative_slope=self.leaky_relu_slope).squeeze(-1)  
+        attn = self._scatter_softmax(attn_logits, self.triplet_h_idx, head_emb.shape[0])              
 
-        e_agg = torch.zeros_like(head_emb)                                               # eq.1
+        e_agg = torch.zeros_like(head_emb)                                              
         e_agg.scatter_add_(0, self.triplet_h_idx.unsqueeze(1).expand_as(e_hrt),
                     attn.unsqueeze(1) * e_hrt)
 
-        new_head_emb = self.W3(torch.cat([head_emb, e_agg], dim=-1))                     # eq.6
+        new_head_emb = self.W3(torch.cat([head_emb, e_agg], dim=-1))                     
         new_head_emb = self.message_dropout(new_head_emb)                               
         return new_head_emb
     
-    # ──────────────────────────────────────────────────────────────────────────
+    # __________________________________________________________________________
     # Forward
-    # ──────────────────────────────────────────────────────────────────────────
+    # __________________________________________________________________________
 
     def forward(self, *input, mode):
-        """
-        Dispatcher in stile KGAT: in base a `mode` instrada al calcolo della loss/score corretto.
-            mode='train_cf'  → loss di raccomandazione (BPR) sul batch di interazioni
-            mode='train_kg'  → loss del KG (TransE pairwise) sul batch di triple
-            mode='predict'   → punteggi per il full-sort ranking in valutazione
-        Args:
-            *input: gli argomenti attesi dal metodo di destinazione.
-            mode (str): 'train_cf' | 'train_kg' | 'predict'.
-        """
         if mode == 'train_cf':
             return self.compute_rec_loss(*input)
         elif mode == 'train_kg':
@@ -327,11 +311,9 @@ class MKGAT(GeneralRecommender):
     def forward_kg(self):
         """
         Perform the forward pass of the Knowledge Graph Embedding module.
-        User embeddings are excluded from the output.
         Returns:
             Tensor: matrix of shape (n_entities, embedding_dim)
-                containing the updated embeddings of all head entities,
-                excluding users.
+                containing the updated embeddings of all head entities. 
         """
         self.node_projected_embeddings = self.shared_structural_fc(
             self.structural_node_embeddings.weight
@@ -383,19 +365,19 @@ class MKGAT(GeneralRecommender):
         return user_all_embeddings, item_all_embeddings
     
 
-    # ──────────────────────────────────────────────────────────────────────────
+    # __________________________________________________________________________
     # Loss
-    # ──────────────────────────────────────────────────────────────────────────
+    # __________________________________________________________________________
  
     def compute_kg_loss(self, batch_h_idx, batch_r_idx, batch_t_idx, batch_t_neg_idx):
         """
-        Compute the Knowledge Graph pairwise ranking loss over a batch of triplets.
-        It Encourages valid triplets to have a lower score than corrupted ones.
-        Args:
-            batch_index (int): index of the current recommendation module batch.
-            head_emb (Tensor, optional): precomputed head entity embeddings. 
-                If None, they are computed.
-
+        Compute the Knowledge Graph pairwise ranking loss over a batch of triples.
+        It Encourages valid triples to have a lower score than corrupted ones.
+         Args:
+            batch_h_idx (tensor): tensor containing the heads
+            batch_r_idx (tensor): tensor containing the relations
+            batch_t_idx (tensor): tensor containing the tails
+            batch_t_neg_idx (tensor): tensor containing the corripted tails
         Returns:
             loss_kg: scalar value of the KG loss for the batch.
         """
@@ -411,7 +393,7 @@ class MKGAT(GeneralRecommender):
 
         loss_kg = ((-1.0) * F.logsigmoid(score_broken - score_valid)).mean()
 
-        # ── Modality contrastive loss (optional) ──────────────────────────
+        # __ Modality contrastive loss (optional) __________________________
         if self.use_contrastive and self.v_feat is not None and self.t_feat is not None:
             image_mask = batch_r_idx == self.image_relation_index
             text_mask  = batch_r_idx == self.text_relation_index
@@ -428,7 +410,6 @@ class MKGAT(GeneralRecommender):
                     img_sel = torch.isin(img_heads, common_t)
                     txt_sel = torch.isin(txt_heads, common_t)
 
-                    # sort by head id so image[i] and text[i] refer to the same item
                     img_order = torch.argsort(img_heads[img_sel])
                     txt_order = torch.argsort(txt_heads[txt_sel])
 
@@ -489,15 +470,14 @@ class MKGAT(GeneralRecommender):
 
        
  
-    # ──────────────────────────────────────────────────────────────────────────
+    # __________________________________________________________________________
     # Inference
-    # ──────────────────────────────────────────────────────────────────────────
+    # __________________________________________________________________________
  
     def full_sort_predict(self, interaction):
         """
         Compute the predicted scores for all items for a given batch of users.
         Used during evaluation to rank all items for each user.
-
         Args:
             interaction (tuple): contains the indices of the users to evaluate
 
@@ -517,12 +497,12 @@ class MKGAT(GeneralRecommender):
         """
         Compute a numerically stable softmax.
         Args:
-            src (Tensor): input logits of shape (n_triplets,)
-            index (Tensor): group assignments of shape (n_triplets,),
+            src (Tensor): input logits of shape (n_triples,)
+            index (Tensor): group assignments of shape (n_triples,),
                 where each value indicates the head entity the triplet belongs to
             num_nodes (int): total number of nodes.
         Returns:
-            Tensor: normalized attention weights of shape (n_triplets,).        
+            Tensor: normalized attention weights of shape (n_triples,).        
         """
         out_max = torch.zeros(num_nodes, device=src.device)
         out_max.index_reduce_(0, index, src, reduce='amax', include_self=False)
