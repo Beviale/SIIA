@@ -7,36 +7,31 @@ model_enriched_triples_format: true
 dataset_support_triples: true
 
 # __ Core hyperparameters (KGAT defaults) ____________________________
-embedding_size: 64          # embed_dim
-relation_dim: 64            # TransR relation space dim
+embedding_size: 64          
+relation_dim: 64           
 
-# Output dim of each propagation layer (lunablack default '[64, 32, 16]').
-# With embedding_size=64 → layers 64→64→32→16; final embedding dim =
-# 64 + 64 + 32 + 16 = 176. n_layers is derived from this list (= len).
 conv_dim_list: '[64, 32, 16]'
 
 aggregation_type: 'bi-interaction'
-aggregator_bias: True       # lunablack uses Linear with bias
+aggregator_bias: True       
 
-# Per-layer output dropout (length must be >= n_layers)
 mess_dropout: [0.1, 0.1, 0.1]
 
 # __ Loss weights ______________________________________________________________
-reg_weight: 0.00001         # = kg_l2loss_lambda / cf_l2loss_lambda (1e-5)
-kg_loss_weight: 1.0         # repo does not weight the KG loss
+reg_weight: 0.00001         
+kg_loss_weight: 1.0         
 
 # __ Optimiser _________________________________________________________________
-learning_rate: [0.0001]     # KGAT uses Adam, lr 1e-4
-kg_batch_size: 2048         # lunablack kg_batch_size
+learning_rate: [0.0001]     
+kg_batch_size: 2048         
 clip_grad_norm: 1.0
 
-# __ Training overrides (lunablack defaults, KGAT-only — override overall.yaml) _
-seed: [2019]                # repo seed (overall.yaml uses 999)
-epochs: 1000                # repo n_epoch
-stopping_step: 10           # repo stopping_steps
-eval_step: 1                # repo evaluate_every
-train_batch_size: 1024      # repo cf_batch_size
-eval_batch_size: 10000      # repo test_batch_size
+seed: [2019]                
+epochs: 1000                
+stopping_step: 10           
+eval_step: 1                
+train_batch_size: 1024      
+eval_batch_size: 10000      
 
 # __ Hyper-parameter search axes _______________________________________________
 hyper_parameters: ["learning_rate"]
