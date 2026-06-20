@@ -6,7 +6,7 @@ end2end: false
 model_enriched_triples_format: true
 dataset_support_triples: true
 
-# __ Core hyperparameters (KGAT defaults) ____________________________
+# __ Core hyperparameters ____________________________
 embedding_size: 64          
 relation_dim: 64           
 
@@ -18,7 +18,7 @@ aggregator_bias: True
 mess_dropout: [0.1, 0.1, 0.1]
 
 # __ Loss weights ______________________________________________________________
-reg_weight: 0.00001         
+reg_weight: 0.001         
 kg_loss_weight: 1.0         
 
 # __ Optimiser _________________________________________________________________
@@ -28,8 +28,8 @@ clip_grad_norm: 1.0
 
 seed: [2019]                
 epochs: 1000                
-stopping_step: 10           
-eval_step: 1                
+stopping_step: 5
+eval_step: 10          
 train_batch_size: 1024      
 eval_batch_size: 10000      
 
