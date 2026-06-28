@@ -380,8 +380,11 @@ class KGATTrainer(Trainer):
 
     def _generate_kg_batch(self):
         """
-        Sample a KG batch (head, relation, pos_tail, neg_tail). The negative
-        tail is a random node that is not a known tail of (head, relation).
+        Sample a KG batch (head, relation, pos_tail, neg_tail). For KGAT the
+        negative tail is a random node that is not a known tail of
+        (head, relation). For MKGAT a modality-aware corruption is used: the
+        negative tail is drawn from the same modality pool as the positive tail
+        (image -> image, text -> text, otherwise a non-multi-modal node).
         Returns four LongTensors of shape (kg_batch_size,).
         """
         idx   = torch.randint(0, self.n_kg_train, (self.kg_batch_size,))
@@ -389,12 +392,29 @@ class KGATTrainer(Trainer):
         r     = self.kg_r[idx]
         pos_t = self.kg_t[idx]
         neg_t = torch.empty_like(pos_t)
-        for i in range(len(idx)):
-            valid = self.kg_valid_tails[(int(h[i]), int(r[i]))]
-            nt = random.randint(0, self.n_nodes - 1)
-            while nt in valid:
+
+        if self.config["model"] == "MKGAT":
+            img_off, txt_off, n_nodes = self.model.image_offset, self.model.text_offset, self.n_nodes
+            for i in range(len(idx)):
+                pt = int(pos_t[i])
+                if pt >= txt_off:
+                    lo, hi = txt_off, n_nodes
+                elif pt >= img_off:
+                    lo, hi = img_off, txt_off
+                else:
+                    lo, hi = 0, img_off
+                valid = self.kg_valid_tails[(int(h[i]), int(r[i]))]
+                nt = random.randint(lo, hi - 1)
+                while nt in valid:
+                    nt = random.randint(lo, hi - 1)
+                neg_t[i] = nt
+        else:
+            for i in range(len(idx)):
+                valid = self.kg_valid_tails[(int(h[i]), int(r[i]))]
                 nt = random.randint(0, self.n_nodes - 1)
-            neg_t[i] = nt
+                while nt in valid:
+                    nt = random.randint(0, self.n_nodes - 1)
+                neg_t[i] = nt
         return h, r, pos_t, neg_t
 
     def _load_checkpoint(self):
@@ -524,11 +544,15 @@ class KGATTrainer(Trainer):
         self.model.train()
         cf_total_loss = 0.0
         cf_loss_batches = []
+        use_cuda = torch.cuda.is_available()
+        if use_cuda:
+            torch.cuda.synchronize()
+        t_cf = time()
 
         # __ CF training _______________
         for idx, interaction in enumerate(train_data): 
             cf_batch_loss = self.model(interaction, mode='train_cf')
-            if np.isnan(cf_batch_loss.cpu().detach().numpy()):
+            if torch.isnan(cf_batch_loss):
                 self.logger.error("CF LOSS REC!")
                 return None, cf_loss_batches
             cf_batch_loss.backward()
@@ -537,18 +561,25 @@ class KGATTrainer(Trainer):
             self.optimizer.zero_grad()
             cf_total_loss += cf_batch_loss.item()
             wandb.log({"Recommendation Batch Loss": cf_batch_loss.item()})
-            
-        # __ KG training _______________
+
+        if use_cuda:
+            torch.cuda.synchronize()
+        cf_time = time() - t_cf
+
         total_loss_kg = 0.0
         n_kg_batch = self.n_kg_train // self.kg_batch_size + 1
+        kg_gen_time = 0.0
+        t_kg_loop = time()
         for iter in range(1, n_kg_batch + 1):
+            t_gen = time()
             kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail = self._generate_kg_batch()
             kg_batch_head = kg_batch_head.to(self.device)
             kg_batch_relation = kg_batch_relation.to(self.device)
             kg_batch_pos_tail = kg_batch_pos_tail.to(self.device)
             kg_batch_neg_tail = kg_batch_neg_tail.to(self.device)
+            kg_gen_time += time() - t_gen
             kg_batch_loss = self.model(kg_batch_head, kg_batch_relation, kg_batch_pos_tail, kg_batch_neg_tail, mode='train_kg')
-            if np.isnan(kg_batch_loss.cpu().detach().numpy()):
+            if torch.isnan(kg_batch_loss):
                 self.logger.error("KG LOSS NAN!")
                 return None, cf_loss_batches
             kg_batch_loss.backward()
@@ -556,6 +587,11 @@ class KGATTrainer(Trainer):
             self.kg_optimizer.zero_grad()
             total_loss_kg += kg_batch_loss.item()
             wandb.log({"KG Batch Loss": kg_batch_loss.item()})
+        if use_cuda:
+            torch.cuda.synchronize()
+        kg_time = time() - t_kg_loop
+        self.logger.info("[TIMER] CF %.1fs | KG %.1fs (gen %.1fs) | n_cf %d n_kg %d" % (
+            cf_time, kg_time, kg_gen_time, len(train_data), n_kg_batch))
 
         if self.config["model"] == "KGAT":
             # __ Attention update (once per epoch, after KG training) ______________

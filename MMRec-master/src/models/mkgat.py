@@ -230,21 +230,18 @@ class MKGAT(GeneralRecommender):
 
         if image_mask.any():
             idx = entity_ids[image_mask] - self.image_offset
-            v = self.v_feat[idx].detach().clone()
-            v = F.normalize(v, dim=-1)         
-            if self.training:
-                drop_mask = torch.rand(v.shape[0], device=self.device) < self.modality_dropout_ratio
-                v[drop_mask] = 0.0
+            v = F.normalize(self.v_feat[idx].detach(), dim=-1)
+            if self.training and self.modality_dropout_ratio > 0:
+                keep = (torch.rand(v.shape[0], 1, device=self.device) >= self.modality_dropout_ratio).to(v.dtype)
+                v = v * keep
             out[image_mask] = self.image_fc(v)
-
 
         if text_mask.any():
             idx = entity_ids[text_mask] - self.text_offset
-            t = self.t_feat[idx].detach().clone()
-            t = F.normalize(t, dim=-1)  
-            if self.training:
-                drop_mask = torch.rand(t.shape[0], device=self.device) < self.modality_dropout_ratio
-                t[drop_mask] = 0.0
+            t = F.normalize(self.t_feat[idx].detach(), dim=-1)
+            if self.training and self.modality_dropout_ratio > 0:
+                keep = (torch.rand(t.shape[0], 1, device=self.device) >= self.modality_dropout_ratio).to(t.dtype)
+                t = t * keep
             out[text_mask] = self.text_fc(t)
 
         return out  
